@@ -113,33 +113,22 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
 
   buttons.forEach(btn => btn.addEventListener("click", () => submit(Number(btn.dataset.v), btn)));
 
-  async function submit(v, btn) {
+  // 입력 한 번 = 피규어 한 개 생성 (지금은 이 기기 화면에서 바로 생성)
+  // 나중에 무게센서 값이 들어오면 이 함수를 호출하도록 연결하면 됩니다.
+  function submit(v, btn) {
     const left = cooldownLeft();
     if (left > 0) {
       statusEl.textContent = `잠시만요, ${Math.ceil(left / 1000)}초 뒤에 다시 쏟을 수 있어요`;
       return;
     }
-    if (!db && window.claude && window.claude.use) {
-      statusEl.textContent = "연결 확인 중...";
-      try { db = await window.claude.use("db"); } catch (e) { db = null; }
-    }
-    if (!db) {
-      statusEl.textContent = "지금은 연결이 어려워요. 잠시 뒤 다시 시도해주세요";
-      return;
-    }
     buttons.forEach(b => b.disabled = true);
     btn.classList.add("picked");
     markPicked();
-    try {
-      await db.collection("entries").add({ v, t: Date.now() });
-      statusEl.textContent = `모래 ${v}스쿱을 흘려보냈어요`;
-    } catch (e) {
-      statusEl.textContent = "전송에 실패했어요. 잠시 뒤 다시 눌러주세요";
-    } finally {
-      setTimeout(() => {
-        buttons.forEach(b => { b.disabled = false; b.classList.remove("picked"); });
-      }, PICK_COOLDOWN_MS);
-    }
+    addFigure(v);
+    statusEl.textContent = `모래 ${v}스쿱을 흘려보냈어요. 전시 화면에서 확인하세요`;
+    setTimeout(() => {
+      buttons.forEach(b => { b.disabled = false; b.classList.remove("picked"); });
+    }, PICK_COOLDOWN_MS);
   }
 
   // ---------- 공유 데이터 (db) ----------
