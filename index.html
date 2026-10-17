@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>모래 한 스쿱 — 시간</title>
+<style>
+:root{--bg:#f4ead8;--ink:#3b2a1a;--accent:#b5652b;color-scheme:light}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#1d1812;--ink:#f1e4cc;--accent:#e08a4b;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1d1812;--ink:#f1e4cc;--accent:#e08a4b}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:"Noto Sans KR",system-ui,sans-serif;overflow:hidden}
+#input{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(20px + env(safe-area-inset-top,0px)) 20px calc(20px + env(safe-area-inset-bottom,0px));gap:18px;text-align:center}
+h1{font-size:22px;margin:0;font-weight:700}
+p.sub{margin:0;opacity:.7;font-size:14px;line-height:1.6}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;width:min(440px,100%)}
+.grid button{aspect-ratio:1;border-radius:14px;border:2px solid var(--ink);background:transparent;color:var(--ink);font-size:20px;font-weight:700;cursor:pointer;transition:transform .1s,background .2s}
+.grid button:active{transform:scale(.94)}
+.grid button:disabled{opacity:.35;cursor:not-allowed}
+.grid button.picked{background:var(--accent);border-color:var(--accent);color:#fff}
+#status{min-height:22px;font-size:14px;color:var(--accent)}
+.link{background:none;border:none;color:var(--ink);opacity:.6;text-decoration:underline;font-size:13px;cursor:pointer;margin-top:8px;font-family:inherit}
+#show{position:fixed;inset:0;display:none;background:#000}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#hud{position:absolute;left:16px;top:calc(12px + env(safe-area-inset-top,0px));font-size:13px;color:#bfeaff;opacity:.6;pointer-events:none;line-height:1.6}
+#hint{position:absolute;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom,0px));text-align:center;font-size:12px;color:#bfeaff;opacity:.4;pointer-events:none}
+#tools{position:absolute;right:12px;top:calc(10px + env(safe-area-inset-top,0px));display:flex;gap:8px}
+#tools button{background:none;border:1px solid #bfeaff;color:#bfeaff;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;opacity:.6;font-family:inherit}
+</style>
+</head>
+<body>
+
+<section id="input">
+  <h1>모래 한 스쿱, 얼마나 쏟을까요?</h1>
+  <p class="sub">1은 한 줌, 10은 가득. 많이 쏟은 만큼<br>당신의 시간은 더 크고, 더 멀리 남아요.</p>
+  <div class="grid">
+    <button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
+    <button data-v="6">6</button><button data-v="7">7</button><button data-v="8">8</button><button data-v="9">9</button><button data-v="10">10</button>
+  </div>
+  <div id="status"></div>
+  <button class="link" id="toShow">전시 화면 보기</button>
+</section>
+
+<section id="show">
+  <canvas id="c"></canvas>
+  <div id="hud"></div>
+  <div id="hint">드래그: 둘러보기 · 휠/두 손가락: 확대·축소</div>
+  <div id="tools">
+    <button id="rot">자동회전 끄기</button>
+    <button id="demo">데모</button>
+    <button id="toInput">입력</button>
+  </div>
+</section>
+
+<script>
+(() => {
+  // ---------- 설정 ----------
+  const PICK_COOLDOWN_MS = 4000;
+  const COOLDOWN_KEY = "sand-last-pick";
+  const MAX_LIFE_S = 22;
+  const PATH_LEN = 8.5;
+  const Z_START = 3.2;
+  const LIGHT = [0, 2.6, -6.5];    // 사람들이 향해 가는 광원
+  const MAX_FIGURES = 40;
+  const MAX_FLYERS = 4000;
+  const PILE_MAX = 3000;
+  const MAX_AGE_LOOKBACK_S = 300;
+  const SPRING = 7;
+  const WALK_RATE = 6.2;
+  const SHAPE_POOL = 12000;
+  const SHAPE_AREA_N = 0.16;
+  const FOV = 50 * Math.PI / 180;
+
+  // ---------- 요소 ----------
+  const inputEl = document.getElementById("input");
+  const showEl = document.getElementById("show");
+  const statusEl = document.getElementById("status");
+  const hudEl = document.getElementById("hud");
+  const buttons = [...document.querySelectorAll(".grid button")];
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const rotBtn = document.getElementById("rot");
+
+  let showing = false;
+  let db = null;
+  let subscribed = false;
+
+  // ---------- 모드 전환 ----------
+  function setShow(on) {
+    showing = on;
+    inputEl.style.display = on ? "none" : "flex";
+    showEl.style.display = on ? "block" : "none";
+    if (on) { ensureSubscribed(); resize(); }
+  }
+  document.getElementById("toShow").addEventListener("click", () => setShow(true));
+  document.getElementById("toInput").addEventListener("click", () => setShow(false));
+  document.getElementById("demo").addEventListener("click", () => addFigure(1 + Math.floor(Math.random() * 10)));
+  rotBtn.addEventListener("click", () => {
+    autoRotate = !autoRotate;
+    rotBtn.textContent = autoRotate ? "자동회전 끄기" : "자동회전 켜기";
+  });
+
+  // ---------- 입력 ----------
+  function cooldownLeft() {
+    try {
+      const last = Number(localStorage.getItem(COOLDOWN_KEY) || 0);
+      return Math.max(0, PICK_COOLDOWN_MS - (Date.now() - last));
+    } catch (e) { return 0; }
+  }
+  function markPicked() {
+    try { localStorage.setItem(COOLDOWN_KEY, String(Date.now())); } catch (e) {}
+  }
+
+  buttons.forEach(btn => btn.addEventListener("click", () => submit(Number(btn.dataset.v), btn)));
+
+  async function submit(v, btn) {
+    const left = cooldownLeft();
+    if (left > 0) {
+      statusEl.textContent = `잠시만요, ${Math.ceil(left / 1000)}초 뒤에 다시 쏟을 수 있어요`;
+      return;
+    }
+    if (!db && window.claude && window.claude.use) {
+      statusEl.textContent = "연결 확인 중...";
+      try { db = await window.claude.use("db"); } catch (e) { db = null; }
+    }
+    if (!db) {
+      statusEl.textContent = "지금은 연결이 어려워요. 잠시 뒤 다시 시도해주세요";
+      return;
+    }
+    buttons.forEach(b => b.disabled = true);
+    btn.classList.add("picked");
+    markPicked();
+    try {
+      await db.collection("entries").add({ v, t: Date.now() });
+      statusEl.textContent = `모래 ${v}스쿱을 흘려보냈어요`;
+    } catch (e) {
+      statusEl.textContent = "전송에 실패했어요. 잠시 뒤 다시 눌러주세요";
+    } finally {
+      setTimeout(() => {
+        buttons.forEach(b => { b.disabled = false; b.classList.remove("picked"); });
+      }, PICK_COOLDOWN_MS);
+    }
+  }
+
+  // ---------- 공유 데이터 (db) ----------
+  function ensureSubscribed() {
+    if (subscribed) return;
+    if (!db) {
+      if (window.claude && window.claude.use) {
+        window.claude.use("db").then(ns => { db = ns; if (showing) ensureSubscribed(); }).catch(() => {});
+      }
+      return;
+    }
+    subscribed = true;
+    db.collection("entries").orderBy("t", "desc").limit(200).onSnapshot(
+      snap => {
+        for (const ch of snap.docChanges()) {
+          if (ch.type !== "added") continue;
+          const d = ch.doc.data();
+          if (!d || typeof d.v !== "number" || typeof d.t !== "number") continue;
+          const v = Math.min(10, Math.max(1, Math.round(d.v)));
+          const ageS = Math.max(0, (Date.now() - d.t) / 1000);
+          if (ageS > MAX_AGE_LOOKBACK_S) continue;
+          addFigure(v, ageS);
+        }
+      },
+      err => { hudEl.textContent = "연결이 끊겼어요: " + (err && err.message ? err.message : ""); }
+    );
+  }
+
+  // ---------- 화면 / 카메라 (직접 원근 투영) ----------
+  let W = 0, H = 0, DPR = 1, focal = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    focal = H / (2 * Math.tan(FOV / 2));
+  }
+  window.addEventListener("resize", () => { if (showing) resize(); });
+  resize();
+
+  let theta = 0.5, phi = 1.15, radius = 11;
+  const TARGET = [0, 1.2, 0.8];
+  let autoRotate = true;
+
+  function camView() {
+    const sp = Math.sin(phi), cp = Math.cos(phi);
+    const C = [TARGET[0] + radius * sp * Math.sin(theta), TARGET[1] + radius * cp, TARGET[2] + radius * sp * Math.cos(theta)];
+    const f = [-sp * Math.sin(theta), -cp, -sp * Math.cos(theta)];
+    const r = [-f[2] / sp, 0, f[0] / sp];
+    const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+    return { C, f, r, u };
+  }
+
+  // 월드 좌표 → 화면 좌표 [sx, sy, 배율, 깊이] (화면 뒤는 null)
+  function project(V, x, y, z) {
+    const dx = x - V.C[0], dy = y - V.C[1], dz = z - V.C[2];
+    const d = dx * V.f[0] + dy * V.f[1] + dz * V.f[2];
+    if (d < 0.2) return null;
+    const cx = dx * V.r[0] + dy * V.r[1] + dz * V.r[2];
+    const cy = dx * V.u[0] + dy * V.u[1] + dz * V.u[2];
+    const s = focal / d;
+    return [W / 2 + cx * s, H / 2 - cy * s, s, d];
+  }
+
+  // 드래그 / 휠 / 핀치
+  const pointers = new Map();
+  let pinchPrev = 0;
+  function stopAuto() { autoRotate = false; rotBtn.textContent = "자동회전 켜기"; }
+  canvas.addEventListener("pointerdown", e => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    stopAuto();
+    pinchPrev = 0;
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      theta -= (e.clientX - prev.x) * 0.006;
+      phi = Math.min(1.5, Math.max(0.15, phi - (e.clientY - prev.y) * 0.005));
+    } else if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchPrev > 0) radius = Math.min(30, Math.max(3, radius * (pinchPrev / d)));
+      pinchPrev = d;
+    }
+  });
+  const endPointer = e => { pointers.delete(e.pointerId); pinchPrev = 0; };
+  canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("pointercancel", endPointer);
+  canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    stopAuto();
+    radius = Math.min(30, Math.max(3, radius * Math.exp(e.deltaY * 0.001)));
+  }, { passive: false });
+
+  // ---------- 입자 스프라이트 (차가운 청백색 글로우) ----------
+  const sprite = (() => {
+    const c = document.createElement("canvas");
+    c.width = 64; c.height = 64;
+    const g = c.getContext("2d");
+    const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0.0, "rgba(255,246,220,1)");
+    grd.addColorStop(0.2, "rgba(240,200,130,0.9)");
+    grd.addColorStop(0.5, "rgba(210,160,90,0.3)");
+    grd.addColorStop(1.0, "rgba(200,150,80,0)");
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 64, 64);
+    return c;
+  })();
+
+  // ---------- 골격 (정규화: 발 y=0, 키 y≈1) ----------
+  const JOINT = {
+    shL: [-0.13, 0.79], shR: [0.13, 0.79],
+    elL: [-0.19, 0.60], elR: [0.19, 0.60],
+    wrL: [-0.21, 0.45], wrR: [0.21, 0.45],
+    hipL: [-0.07, 0.52], hipR: [0.07, 0.52],
+    knL: [-0.075, 0.27], knR: [0.075, 0.27],
+    anL: [-0.08, 0.03], anR: [0.08, 0.03]
+  };
+  const SEG = [
+    { a: "shL", b: "elL", parent: -1, r: 0.055 },
+    { a: "elL", b: "wrL", parent: 0,  r: 0.045 },
+    { a: "shR", b: "elR", parent: -1, r: 0.055 },
+    { a: "elR", b: "wrR", parent: 2,  r: 0.045 },
+    { a: "hipL", b: "knL", parent: -1, r: 0.085 },
+    { a: "knL", b: "anL", parent: 4,  r: 0.058 },
+    { a: "hipR", b: "knR", parent: -1, r: 0.085 },
+    { a: "knR", b: "anR", parent: 6,  r: 0.058 }
+  ];
+
+  function torsoHalfWidth(y) {
+    return 0.11 + 0.05 * Math.exp(-((y - 0.8) * (y - 0.8)) / 0.01);
+  }
+  function distToSeg(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1e-6;
+    let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const qx = ax + dx * t - px, qy = ay + dy * t - py;
+    return Math.sqrt(qx * qx + qy * qy);
+  }
+
+  // ---------- 실루엣 입자 풀 ----------
+  let shapePool = null;
+  function buildShapePool() {
+    if (shapePool) return shapePool;
+    const pool = [];
+    for (let i = 0; i < SHAPE_POOL; i++) {
+      const x = Math.random() * 0.5 - 0.25;
+      const y = Math.random() * 1.02;
+      let seg = -2;
+      for (let s = 0; s < SEG.length; s++) {
+        const A = JOINT[SEG[s].a], B = JOINT[SEG[s].b];
+        if (distToSeg(x, y, A[0], A[1], B[0], B[1]) <= SEG[s].r) { seg = s; break; }
+      }
+      if (seg === -2) {
+        const inHead = x * x + (y - 0.92) * (y - 0.92) <= 0.065 * 0.065;
+        const inTorso = y >= 0.5 && y <= 0.86 && Math.abs(x) <= torsoHalfWidth(y);
+        const inNeck = y > 0.84 && y < 0.9 && Math.abs(x) < 0.04;
+        if (inHead || inTorso || inNeck) seg = -1;
+      }
+      if (seg === -2) continue;
+      pool.push({ rx: x, ry: y, seg, tz: (Math.random() * 2 - 1) * (seg >= 0 ? 0.07 : 0.1) });
+    }
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    shapePool = pool;
+    return pool;
+  }
+
+  // ---------- 걷기 포즈 ----------
+  function poseSegments(g) {
+    const rel = [
+      0.25 * g, -0.2,
+     -0.25 * g, -0.2,
+     -0.3 * g, 0.05 + 0.5 * Math.max(0, g),
+      0.3 * g, 0.05 + 0.5 * Math.max(0, -g)
+    ];
+    const tr = [];
+    for (let i = 0; i < SEG.length; i++) {
+      const s = SEG[i];
+      const root = JOINT[s.a];
+      if (s.parent < 0) {
+        tr.push({ ox: root[1], oy: 0, ang: rel[i] });
+      } else {
+        const p = tr[s.parent];
+        const pr = JOINT[SEG[s.parent].a];
+        const du = root[1] - pr[1];
+        const c = Math.cos(p.ang), sn = Math.sin(p.ang);
+        tr.push({ ox: p.ox + c * du, oy: p.oy + sn * du, ang: p.ang + rel[i] });
+      }
+    }
+    return tr;
+  }
+
+  // ---------- 상태 ----------
+  const figures = [];
+  const flyers = [];
+  const pile = [];
+  let totalSand = 0;
+  let totalCount = 0;
+  const SPEED = PATH_LEN / MAX_LIFE_S;
+
+  function figHeight(v) { return 1.2 + v * 0.12; }
+
+  function addPile(v) {
+    const R = Math.min(2.2, 0.6 + 0.2 * Math.log2(1 + totalSand));
+    for (let i = 0; i < v * 4 && pile.length < PILE_MAX; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * R;
+      pile.push({ x: Math.cos(a) * r, y: Math.random() * 0.08, z: Z_START + Math.sin(a) * r });
+    }
+  }
+
+  // 겹치지 않는 자리 찾기. 자리가 없으면 가장 앞쪽(카메라에 가까운) 캐릭터의 뒤쪽에 랜덤 스폰
+  function placeFigure(ageS, H3) {
+    const baseZ = Z_START - SPEED * ageS;
+    const MIN_DX = 0.45 + H3 * 0.12;
+    const MIN_DZ = 0.6;
+    const occupied = figures.map(f => ({ lane: f.lane, z: Z_START - SPEED * f.age + f.zOff }));
+    const overlaps = (lane, z) => occupied.some(o => Math.abs(o.lane - lane) < MIN_DX && Math.abs(o.z - z) < MIN_DZ);
+    for (let i = 0; i < 40; i++) {
+      const lane = (Math.random() - 0.5) * 6;
+      if (!overlaps(lane, baseZ)) return { lane, zOff: 0 };
+    }
+    const frontZ = occupied.length ? Math.max(...occupied.map(o => o.z)) : baseZ;
+    for (let i = 0; i < 40; i++) {
+      const zTarget = frontZ - 1.2 - Math.random() * 0.6;
+      const lane = (Math.random() - 0.5) * 6;
+      if (!overlaps(lane, zTarget)) return { lane, zOff: zTarget - baseZ };
+    }
+    const zTarget = frontZ - 1.2 - Math.random() * 0.6;
+    return { lane: (Math.random() - 0.5) * 6, zOff: zTarget - baseZ };
+  }
+
+  function addFigure(v, ageS = 0) {
+    const life = 6 + v * 1.6;
+    totalSand += v; totalCount++;
+    addPile(v);
+    if (ageS >= life) return;
+
+    const crowd = Math.min(1, Math.max(0.45, 1 - figures.length / 45));
+    const n = Math.round((120 + v * 120) * crowd);
+    const H3 = figHeight(v);
+    const sz = H3 * Math.sqrt(SHAPE_AREA_N / n) * 0.9;
+    const take = buildShapePool().slice(0, n);
+
+    const placement = placeFigure(ageS, H3);
+    figures.push({
+      v, life, H3,
+      age: ageS,
+      lane: placement.lane,
+      zOff: placement.zOff,
+      phase: Math.random() * Math.PI * 2,
+      acc: 0,
+      parts: take.map(p => ({
+        rx: p.rx, ry: p.ry, seg: p.seg, tz: p.tz,
+        x: 0, y: 0, z: 0, init: false,
+        sz: sz * (0.9 + Math.random() * 0.3)
+      }))
+    });
+    if (figures.length > MAX_FIGURES) {
+      const old = figures.find(f => f.age < f.life * 0.85);
+      if (old) old.age = old.life * 0.85;
+    }
+  }
+
+  function spawnFlyer(x, y, z, vx, vy, vz, life, size) {
+    if (flyers.length >= MAX_FLYERS) flyers.shift();
+    flyers.push({ x, y, z, vx, vy, vz, age: 0, life, size });
+  }
+
+  // ---------- 업데이트 ----------
+  function update(dt) {
+    const k = 1 - Math.exp(-SPRING * dt);
+    for (const f of figures) {
+      f.age += dt;
+      const p = f.age / f.life;
+      const s = Math.max(0.45, 1 - 0.55 * p);
+      const H3 = f.H3 * s;
+      const zFeet = Z_START - SPEED * f.age + f.zOff;
+      const g = Math.sin(f.age * WALK_RATE + f.phase);
+      const bob = 0.012 * Math.abs(g);
+      const tr = poseSegments(g);
+      const releaseAll = p >= 0.85;
+
+      if (p < 0.6) {
+        f.acc += dt * (2 + f.v * 1.5);
+        while (f.acc >= 1) {
+          f.acc -= 1;
+          spawnFlyer(f.lane + (Math.random() - 0.5) * 0.4, 0.02, zFeet,
+            (Math.random() - 0.5) * 0.1, 0.25, (Math.random() - 0.5) * 0.1,
+            0.8 + Math.random() * 0.6, 0.05);
+        }
+      }
+
+      const kept = [];
+      for (const part of f.parts) {
+        if (!part.init) {
+          part.x = f.lane + (Math.random() - 0.5) * 0.3;
+          part.y = Math.random() * 0.1;
+          part.z = zFeet;
+          part.init = true;
+        }
+        if (releaseAll || part.ry > s) {
+          spawnFlyer(part.x, part.y, part.z,
+            0.2 + Math.random() * 0.5, 0.5 + Math.random() * 0.7, (Math.random() - 0.5) * 0.2,
+            2.2 + Math.random() * 1.8, part.sz * 0.8);
+          continue;
+        }
+
+        let wx, wy, wz;
+        if (part.seg < 0) {
+          wx = part.rx; wy = part.ry + bob; wz = part.tz;
+        } else {
+          const T = tr[part.seg];
+          const J = JOINT[SEG[part.seg].a];
+          const du = part.ry - J[1], dv = part.tz;
+          const c = Math.cos(T.ang), sn = Math.sin(T.ang);
+          wx = part.rx;
+          wy = T.ox + c * du - sn * dv + bob;
+          wz = T.oy + sn * du + c * dv;
+        }
+
+        const tx = f.lane + wx * H3;
+        const ty = wy * H3;
+        const tz = zFeet + wz * H3;
+        part.x += (tx - part.x) * k;
+        part.y += (ty - part.y) * k;
+        part.z += (tz - part.z) * k;
+        kept.push(part);
+      }
+      f.parts = kept;
+    }
+    for (let i = figures.length - 1; i >= 0; i--) {
+      const f = figures[i];
+      if (f.age >= f.life && f.parts.length === 0) figures.splice(i, 1);
+    }
+
+    for (const q of flyers) {
+      q.age += dt;
+      q.x += q.vx * dt;
+      q.y += q.vy * dt;
+      q.z += q.vz * dt;
+      q.vx *= (1 - 0.3 * dt);
+    }
+    for (let i = flyers.length - 1; i >= 0; i--) {
+      const q = flyers[i];
+      if (q.age >= q.life || q.y > 12) flyers.splice(i, 1);
+    }
+  }
+
+  // ---------- 그리기 ----------
+  // 광원: 검은 배경 위의 청백색 블룸 + 광원에서 바닥으로 갈라지는 결 줄무늬
+  function drawLight(V) {
+    const L = project(V, LIGHT[0], LIGHT[1], LIGHT[2]);
+    const cx = L ? L[0] : W / 2;
+    const cy = L ? L[1] : H * 0.35;
+    const t = performance.now() / 1000;
+
+    ctx.globalCompositeOperation = "source-over";
+    // 아주 약한 푸른 안개 (배경은 거의 검정 유지)
+    const fog = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.6);
+    fog.addColorStop(0, "rgba(120,85,40,0.22)");
+    fog.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = fog;
+    ctx.fillRect(0, 0, W, H);
+
+    // 결 줄무늬: 광원에서 아래쪽으로 부채꼴 모양의 얇은 빛줄기
+    ctx.globalCompositeOperation = "lighter";
+    const N = 46;
+    const R = Math.max(W, H) * 1.6;
+    for (let i = 0; i < N; i++) {
+      const spread = (i / (N - 1)) * 2 - 1;                  // -1 ~ 1
+      const a = Math.PI / 2 + spread * 0.9 + Math.sin(i * 2.7 + t * 0.4) * 0.02;
+      const w = 0.006 + 0.004 * Math.sin(i * 1.3 + t * 0.6);
+      const alpha = 0.03 + 0.03 * Math.abs(Math.sin(i * 0.9 + t * 0.35)) + 0.02 * (1 - Math.abs(spread));
+      const grd = ctx.createLinearGradient(cx, cy, cx + Math.cos(a) * R * 0.5, cy + Math.sin(a) * R * 0.5);
+      grd.addColorStop(0, "rgba(255,220,160," + alpha.toFixed(3) + ")");
+      grd.addColorStop(1, "rgba(200,150,80,0)");
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a - w) * R, cy + Math.sin(a - w) * R);
+      ctx.lineTo(cx + Math.cos(a + w) * R, cy + Math.sin(a + w) * R);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 블룸: 바깥 번짐 → 중간 청색 → 중심 백색
+    const rOuter = Math.max(90, H * 0.22);
+    const bloom = ctx.createRadialGradient(cx, cy, 0, cx, cy, rOuter);
+    bloom.addColorStop(0, "rgba(255,235,190,0.9)");
+    bloom.addColorStop(0.12, "rgba(240,190,110,0.55)");
+    bloom.addColorStop(0.4, "rgba(180,120,60,0.15)");
+    bloom.addColorStop(1, "rgba(140,95,45,0)");
+    ctx.fillStyle = bloom;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rOuter, 0, Math.PI * 2);
+    ctx.fill();
+
+    const rCore = Math.max(10, H * 0.025);
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, rCore);
+    core.addColorStop(0, "rgba(255,255,255,1)");
+    core.addColorStop(0.5, "rgba(255,240,205,0.9)");
+    core.addColorStop(1, "rgba(240,200,140,0)");
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rCore, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  function drawGround(V) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = "rgba(180,140,90,0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = -8; i <= 8; i++) {
+      const a = project(V, i, 0, -8), b = project(V, i, 0, 8);
+      if (a && b) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      const c = project(V, -8, 0, i), d = project(V, 8, 0, i);
+      if (c && d) { ctx.moveTo(c[0], c[1]); ctx.lineTo(d[0], d[1]); }
+    }
+    ctx.stroke();
+  }
+
+  function putPoint(V, x, y, z, worldSize, alpha) {
+    const p = project(V, x, y, z);
+    if (!p) return;
+    const size = worldSize * p[2];
+    if (size < 0.4) return;
+    const dl = (x - LIGHT[0]) * (x - LIGHT[0]) + (y - LIGHT[1]) * (y - LIGHT[1]) + (z - LIGHT[2]) * (z - LIGHT[2]);
+    const boost = 1 + 1.2 * Math.exp(-dl / 8);
+    ctx.globalAlpha = Math.min(1, alpha * boost);
+    ctx.drawImage(sprite, p[0] - size / 2, p[1] - size / 2, size, size);
+  }
+
+  function draw(V) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, W, H);
+    drawLight(V);
+    drawGround(V);
+
+    ctx.globalCompositeOperation = "lighter";
+    for (const q of pile) putPoint(V, q.x, q.y, q.z, 0.05, 0.35);
+    for (const f of figures) {
+      for (const part of f.parts) putPoint(V, part.x, part.y, part.z, part.sz * 2.2, 0.9);
+    }
+    for (const q of flyers) {
+      const r = 1 - q.age / q.life;
+      putPoint(V, q.x, q.y, q.z, q.size * 3, Math.pow(r, 1.2));
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  // ---------- 루프 ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (showing) {
+      if (autoRotate) theta += dt * 0.12;
+      update(dt);
+      draw(camView());
+      hudEl.textContent = `걷는 사람 ${figures.length}명 · 누적 ${totalCount}명 · 모래 ${totalSand}스쿱`;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  if (location.hash === "#show" || new URLSearchParams(location.search).has("show")) setShow(true);
+  ensureSubscribed();
+})();
+</script>
+</body>
+</html>
