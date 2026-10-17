@@ -113,9 +113,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
 
   buttons.forEach(btn => btn.addEventListener("click", () => submit(Number(btn.dataset.v), btn)));
 
-  // 입력 한 번 = 피규어 한 개 생성 (지금은 이 기기 화면에서 바로 생성)
-  // 나중에 무게센서 값이 들어오면 이 함수를 호출하도록 연결하면 됩니다.
-  function submit(v, btn) {
+  // 입력 한 번 = 피규어 한 개 생성
+  // 원격 연결(Firebase)이 준비되어 있으면 저장해서 모든 기기 화면에 반영, 아니면 이 기기에서만 생성
+  async function submit(v, btn) {
     const left = cooldownLeft();
     if (left > 0) {
       statusEl.textContent = `잠시만요, ${Math.ceil(left / 1000)}초 뒤에 다시 쏟을 수 있어요`;
@@ -124,38 +124,39 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
     buttons.forEach(b => b.disabled = true);
     btn.classList.add("picked");
     markPicked();
-    addFigure(v);
-    statusEl.textContent = `모래 ${v}스쿱을 흘려보냈어요. 전시 화면에서 확인하세요`;
-    setTimeout(() => {
-      buttons.forEach(b => { b.disabled = false; b.classList.remove("picked"); });
-    }, PICK_COOLDOWN_MS);
+    try {
+      if (window.sandRemote) {
+        await window.sandRemote.send(v);
+        statusEl.textContent = `모래 ${v}스쿱을 흘려보냈어요. 전시 화면에 곧 나타나요`;
+      } else {
+        addFigure(v);
+        statusEl.textContent = `모래 ${v}스쿱을 흘려보냈어요 (이 기기 화면)`;
+      }
+    } catch (err) {
+      statusEl.textContent = "전송에 실패했어요. 인터넷 연결을 확인하고 다시 눌러주세요";
+    } finally {
+      setTimeout(() => {
+        buttons.forEach(b => { b.disabled = false; b.classList.remove("picked"); });
+      }, PICK_COOLDOWN_MS);
+    }
   }
 
-  // ---------- 공유 데이터 (db) ----------
+  // ---------- 공유 데이터 (Firebase) ----------
   function ensureSubscribed() {
-    if (subscribed) return;
-    if (!db) {
-      if (window.claude && window.claude.use) {
-        window.claude.use("db").then(ns => { db = ns; if (showing) ensureSubscribed(); }).catch(() => {});
-      }
-      return;
-    }
+    if (subscribed || !window.sandRemote) return;
     subscribed = true;
-    db.collection("entries").orderBy("t", "desc").limit(200).onSnapshot(
-      snap => {
-        for (const ch of snap.docChanges()) {
-          if (ch.type !== "added") continue;
-          const d = ch.doc.data();
-          if (!d || typeof d.v !== "number" || typeof d.t !== "number") continue;
-          const v = Math.min(10, Math.max(1, Math.round(d.v)));
-          const ageS = Math.max(0, (Date.now() - d.t) / 1000);
-          if (ageS > MAX_AGE_LOOKBACK_S) continue;
-          addFigure(v, ageS);
-        }
+    window.sandRemote.listen(
+      d => {
+        if (!d || typeof d.v !== "number" || typeof d.t !== "number") return;
+        const v = Math.min(10, Math.max(1, Math.round(d.v)));
+        const ageS = Math.max(0, (Date.now() - d.t) / 1000);
+        if (ageS > MAX_AGE_LOOKBACK_S) return;
+        addFigure(v, ageS);
       },
-      err => { hudEl.textContent = "연결이 끊겼어요: " + (err && err.message ? err.message : ""); }
+      err => { subscribed = false; hudEl.textContent = "연결 오류: " + (err && err.message ? err.message : ""); }
     );
   }
+  window.addEventListener("sandRemoteReady", () => { if (showing) ensureSubscribed(); });
 
   // ---------- 화면 / 카메라 (직접 원근 투영) ----------
   let W = 0, H = 0, DPR = 1, focal = 1;
@@ -611,6 +612,41 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
   if (location.hash === "#show" || new URLSearchParams(location.search).has("show")) setShow(true);
   ensureSubscribed();
 })();
+</script>
+
+<script type="module">
+  // ===== Firebase 설정 (아래 값을 Firebase 콘솔에서 복사해 교체하세요) =====
+  const firebaseConfig = {
+    apiKey: "REPLACE_API_KEY",
+    authDomain: "REPLACE_PROJECT.firebaseapp.com",
+    projectId: "REPLACE_PROJECT",
+    storageBucket: "REPLACE_PROJECT.appspot.com",
+    messagingSenderId: "REPLACE_SENDER_ID",
+    appId: "REPLACE_APP_ID"
+  };
+  // ======================================================================
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getFirestore, collection, addDoc, query, orderBy, limit, onSnapshot }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  if (!firebaseConfig.projectId.startsWith("REPLACE")) {
+    try {
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+      window.sandRemote = {
+        send: (v) => addDoc(collection(db, "entries"), { v, t: Date.now() }),
+        listen: (onAdd, onErr) => {
+          const q = query(collection(db, "entries"), orderBy("t", "desc"), limit(200));
+          onSnapshot(q, snap => {
+            snap.docChanges().forEach(ch => { if (ch.type === "added") onAdd(ch.doc.data()); });
+          }, onErr);
+        }
+      };
+      window.dispatchEvent(new Event("sandRemoteReady"));
+    } catch (err) {
+      console.error("Firebase 연결 실패", err);
+    }
+  }
 </script>
 </body>
 </html>
