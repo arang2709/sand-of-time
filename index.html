@@ -161,13 +161,16 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-acti
   // ---------- 화면 / 카메라 (직접 원근 투영) ----------
   let W = 0, H = 0, DPR = 1, focal = 1;
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    DPR = Math.min(window.devicePixelRatio || 1, 2.5);   // 고해상도 폰에서 선명하게
     W = window.innerWidth; H = window.innerHeight;
     canvas.width = W * DPR; canvas.height = H * DPR;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    focal = H / (2 * Math.tan(FOV / 2));
+    // 세로 화면(휴대폰)에서는 가로 폭 기준으로 맞춰서 좌우로 펼쳐진 사람들이 잘리지 않게 함
+    focal = Math.min(H, W * 1.6) / (2 * Math.tan(FOV / 2));
   }
   window.addEventListener("resize", () => { if (showing) resize(); });
+  window.addEventListener("orientationchange", () => { if (showing) setTimeout(resize, 200); });
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", () => { if (showing) resize(); });
   resize();
 
   let theta = 0.5, phi = 1.15, radius = 11;
