@@ -702,7 +702,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   //   카메라를 '붓는 화면의 꽃이 화면에 보이던 자리·크기 그대로 정원 바닥에 서 있도록' 세운 뒤
   //   붓는 화면의 배경만 서서히 걷어 냄. 꽃은 움직이지 않고, 그 뒤 정원의 다른 꽃들과 합쳐짐
   const FOCUS_D = 7;                   // 새 꽃을 보여줄 때 기본 카메라 거리
-  const FLY_S = 1.3, HAND_S = 6.5;     // 배경이 바뀌는 시간, 정원으로 넘겨 주는 시각
+  const FLY_S = 1.3, HAND_S = 4;     // 배경이 바뀌는 시간, 정원으로 넘겨 주는 시각
   let tr = null;
   const bv = new THREE.Vector3(), bd = new THREE.Vector3();
   const mix = (a, b, m) => a + (b - a) * m;
@@ -721,7 +721,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     const snap = pv.fl.map(f => ({ f, a: pourParams(f, now) }));
     // 꽃 크기가 정원 속 크기(1배 안팎)와 맞도록 카메라 거리를 고름
     const solve = d => {
-      focus = { x: 0, z: 0, d, until: now + 15 };
+      focus = { x: 0, z: 0, d, until: now + 4.5 };   // 배경이 바뀐 뒤 약 3초 보여주고 물러남
       snapCam(plot); applyCam(); camera.updateMatrixWorld();
       return snap.map(({ a }) => {
         const g = groundAt(a.x0, a.y0), dd = viewDepth(g.x, g.z);
@@ -843,7 +843,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     if (!camReady) { camReady = true; cam.dist = over; cam.y = 1.1 + over * 0.02; cam.pitch = 0.15 + over * 0.0007; }   // 처음엔 정원 전체가 보이는 자리에서 시작
     let gd = over * userZoom, gx = 0, gz = 0, gyy = 1.1 + over * 0.02;
     if (focus && now < focus.until) { gd = focus.d || FOCUS_D; gx = focus.x; gz = focus.z; gyy = 1.0; }   // 방금 핀 꽃 가까이
-    const k = Math.min(1, dt * 0.9);
+    const k = Math.min(1, dt * (focusing ? 0.9 : 1.6));   // 정원 전체로 물러날 때는 조금 빠르게
     cam.dist += (gd - cam.dist) * k;
     cam.x += (gx - cam.x) * k; cam.y += (gyy - cam.y) * k; cam.z += (gz - cam.z) * k;
     if (userPitch === null) cam.pitch += (0.15 + cam.dist * 0.0007 - cam.pitch) * k;
