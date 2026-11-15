@@ -69,6 +69,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   <div id="tools">
     <button id="serial">센서 연결</button>
     <button id="demo">데모</button>
+    <button id="clear">정원 비우기</button>
     <button id="full">전체 화면</button>
     <button id="toInput">참여 화면</button>
   </div>
@@ -131,6 +132,13 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   document.getElementById("toShow").addEventListener("click", () => setShow(true));
   document.getElementById("toInput").addEventListener("click", () => setShow(false));
   document.getElementById("demo").addEventListener("click", () => enqueue(1 + Math.floor(Math.random() * 10), Date.now()));
+  // 정원 비우기: 이 화면에 핀 꽃을 모두 치움 (기록은 Firebase에 그대로 남고, 기다리던 입력은 이어서 진행)
+  document.getElementById("clear").addEventListener("click", () => {
+    if (!confirm("정원의 꽃을 모두 비울까요?")) return;
+    plots.length = 0; flowerCount = 0; maxLayer = 0;
+    occupied.forEach(o => o.length = 0);
+    height.fill(0); soil.length = 0;
+  });
   document.getElementById("full").addEventListener("click", () => {
     if (document.fullscreenElement) document.exitFullscreen(); else showEl.requestFullscreen?.();
   });
@@ -811,7 +819,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     appId: "1:1009594124584:web:88bcf57292a4e0d5b6a81d"
   };
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, collection, addDoc, query, orderBy, limit, onSnapshot }
+  import { getFirestore, collection, addDoc, query, where, orderBy, limit, onSnapshot }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   // 주소 뒤에 ?local 을 붙이면 Firebase 없이 이 화면에서만 동작 (디자인 확인·시험용)
   if (!new URLSearchParams(location.search).has("local")) try {
@@ -820,7 +828,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
       send: v => addDoc(collection(db, "entries"), { v, t: Date.now() }),
       sendAt: (v, t) => addDoc(collection(db, "entries"), { v, t }),
       listen: (onDocs, onErr) => {
-        const q = query(collection(db, "entries"), orderBy("t", "desc"), limit(150));
+        // 기본: 화면을 연 뒤 들어온 입력만 (기기마다 시계가 조금 달라도 놓치지 않게 10초 여유)
+        // 주소에 ?history 를 붙이면 예전 입력 최근 150개를 이미 핀 꽃으로 불러옴
+        const q = new URLSearchParams(location.search).has("history")
+          ? query(collection(db, "entries"), orderBy("t", "desc"), limit(150))
+          : query(collection(db, "entries"), where("t", ">", Date.now() - 10000), orderBy("t", "asc"));
         onSnapshot(q, snap => {
           onDocs(snap.docChanges().filter(ch => ch.type === "added").map(ch => ch.doc.data()));
         }, onErr);
