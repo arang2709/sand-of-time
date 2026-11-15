@@ -2,9 +2,10 @@
   시간의 정원 - 적외선 센서 + 무게센서(HX711) → 웹 전시 화면
   ------------------------------------------------------------
   웹 페이지(크롬/엣지)와 USB 시리얼(9600)로 연결됩니다.
-  아두이노가 보내는 신호는 딱 두 줄입니다.
+  아두이노가 보내는 신호는 세 가지입니다.
 
     START        모래가 깔때기 관을 지나가기 시작함
+    P,5.2        붓는 중. 5.2 = 지금까지 부은 모래 무게(g), 0.3초마다
     END,12.3     모래가 멈춤. 12.3 = 방금 부은 모래 무게(g)
 
   (선택) W,123.4 처럼 현재 총무게를 보내면 화면 왼쪽 위에 표시됩니다.
@@ -26,11 +27,12 @@ float CALIBRATION = 420.0;                    // 무게 보정값 (아래 '보�
 const unsigned long START_CONFIRM_MS = 80;    // 이 시간 이상 감지되면 '흐르기 시작'
 const unsigned long END_QUIET_MS = 1500;      // 이 시간 동안 감지가 없으면 '멈춤'
 const unsigned long SETTLE_MS = 800;          // 멈춘 뒤 모래가 가라앉을 때까지 기다림
-const bool SEND_LIVE_WEIGHT = false;          // true면 1초마다 W,총무게 전송 (테스트용)
+const unsigned long PROGRESS_MS = 300;        // 붓는 동안 이 간격으로 P,지금까지 부은 무게 전송
+const bool SEND_LIVE_WEIGHT = false;         // true면 1초마다 W,총무게 전송 (테스트용)
 
 HX711 scale;
 bool flowing = false;
-unsigned long firstSeen = 0, lastSeen = 0, lastLive = 0;
+unsigned long firstSeen = 0, lastSeen = 0, lastLive = 0, lastProgress = 0;
 float baseline = 0;   // 붓기 직전의 무게 (영점)
 
 bool sandDetected() {
@@ -68,6 +70,16 @@ void loop() {
     }
   } else {
     if (seen) lastSeen = now;
+
+    // 붓는 중: 지금까지 부은 무게를 보냄 (3D 화면에서 꽃 송이가 실시간으로 늘어남)
+    if (now - lastProgress >= PROGRESS_MS && scale.is_ready()) {
+      lastProgress = now;
+      float soFar = scale.get_units(1) - baseline;
+      if (soFar < 0) soFar = 0;
+      Serial.print("P,");
+      Serial.println(soFar, 1);
+    }
+
     if (now - lastSeen >= END_QUIET_MS) {          // 한동안 감지가 없으면 멈춘 것으로 판단
       delay(SETTLE_MS);
       float grams = scale.get_units(10) - baseline;

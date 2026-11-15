@@ -86,14 +86,14 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // 꽃의 색: 관람객마다 고유한 씨앗
-  const HUES = [[222,200,255],[255,205,225],[255,226,170],[205,232,255],[255,245,235]];
+  const HUES = [[205,180,255],[255,185,205],[255,215,150],[170,215,255],[255,240,220]];
   // 꽃 모양 5가지: 꽃잎 수(k)와 꽃잎 폭(wf)
   const SHAPES = [
-    { name: "물방울", k: 6, wf: 0.42 },
-    { name: "튤립", k: 5, wf: 0.62 },
-    { name: "데이지", k: 10, wf: 0.2 },
-    { name: "코스모스", k: 8, wf: 0.4 },
-    { name: "크로커스", k: 6, wf: 0.3 }
+    { name: "물방울", k: 4, wf: 0.5 },
+    { name: "튤립", k: 3, wf: 0.62 },
+    { name: "데이지", k: 5, wf: 0.34 },
+    { name: "코스모스", k: 4, wf: 0.46 },
+    { name: "크로커스", k: 5, wf: 0.4 }
   ];
   // 센서 무게 → 스쿱 수 환산 (한 스쿱 무게, 주소 뒤 ?scoop=8 처럼 바꿀 수 있음)
   const SCOOP_G = Number(new URLSearchParams(location.search).get("scoop")) || 8;
@@ -210,15 +210,76 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
   }
   function settle(x, r) {
-    const p = { x, y: groundY(x, r) + Math.random() * 7 * u * scaleOf(r),
-      s: (0.6 + Math.random() * 1.6) * u * scaleOf(r), a: 0.3 + Math.random() * 0.6,
+    // 새 모래는 바닥선 한 줄에 몰리지 않고 모래밭 위로 넓게 흩어짐
+    const p = { x, y: groundY(x, r) + Math.random() * Math.random() * 26 * u * scaleOf(r),
+      s: (0.6 + Math.random() * 1.6) * u * scaleOf(r), a: 0.25 + Math.random() * 0.5,
       w: 0.5 + Math.random() * 2.5, p: Math.random() * 6.28 };
     if (soil.length < MAX_SETTLED) soil.push(p); else soil[Math.floor(Math.random() * MAX_SETTLED)] = p;
   }
 
+  // ---- 처음부터 쌓여 있는 모래밭 (한 번만 그려 두고 매 프레임 붙임) ----
+  const HORIZON_R = 9;            // 모래밭이 어둠 속으로 사라지는 깊이
+  let bed = null, bedY0 = 0, bedH = 1, bedTw = [];
+  function rng(seed) {
+    return () => {
+      seed = seed + 0x6D2B79F5 | 0;
+      let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
   function buildBackdrop() {
     hx0 = W / 2 - W / (2 * 0.62); hx1 = W / 2 + W / (2 * 0.62);
     MAXH = 34 * u;
+
+    const step = H * 0.035, bw = hx1 - hx0;
+    bedY0 = gyFront - HORIZON_R * step;
+    bedH = gyFront + (H - gyFront) / 0.62 + 4 - bedY0;
+    const q = Math.min(DPR, 1.5, 4096 / bw);
+    bed = document.createElement("canvas");
+    bed.width = Math.max(1, Math.round(bw * q)); bed.height = Math.max(1, Math.round(bedH * q));
+    const g = bed.getContext("2d");
+    g.scale(q, q);
+
+    // 모래 바탕: 멀리서는 어둠에 녹고 앞으로 올수록 또렷해짐
+    const f0 = HORIZON_R * step / bedH;
+    const body = g.createLinearGradient(0, 0, 0, bedH);
+    body.addColorStop(0, "rgba(56,43,29,0)");
+    body.addColorStop(f0 * 0.5, "rgba(56,43,29,0.3)");
+    body.addColorStop(f0, "rgba(56,43,29,0.8)");
+    body.addColorStop(1, "rgba(50,38,26,0.95)");
+    g.fillStyle = body; g.fillRect(0, 0, bw, bedH);
+
+    // 모래알: 뒤쪽은 작고 흐리게, 앞쪽은 크고 밝게
+    const rand = rng(7);
+    const cols = ["233,201,142", "255,232,190", "198,164,110", "150,120,82"];
+    const depth = y => {
+      const r = (gyFront - (bedY0 + y)) / step;
+      return {
+        sc: Math.min(1.7, Math.pow(0.84, r)),
+        al: (r > 5 ? Math.max(0, (HORIZON_R - r) / (HORIZON_R - 5)) : 1) * Math.min(1, Math.pow(0.9, r))
+      };
+    };
+    const n = Math.min(70000, Math.round(bw * bedH / (34 * u * u)));
+    for (let i = 0; i < n; i++) {
+      const y = rand() * bedH, d = depth(y);
+      const a = (0.1 + rand() * rand() * 0.75) * d.al;
+      if (a < 0.02) continue;
+      g.fillStyle = `rgba(${cols[(rand() * 4) | 0]},${a.toFixed(3)})`;
+      g.beginPath();
+      g.arc(rand() * bw, y, (0.7 + rand() * 1.5) * u * d.sc / 2, 0, 6.2832);
+      g.fill();
+    }
+
+    // 모래밭 위에서 반짝이는 알갱이
+    bedTw = [];
+    const n2 = Math.min(1400, Math.round(n / 30));
+    for (let i = 0; i < n2; i++) {
+      const y = rand() * bedH, d = depth(y);
+      if (d.al < 0.05) continue;
+      bedTw.push({ x: hx0 + rand() * bw, y: bedY0 + y, s: (0.6 + rand() * 1.4) * u * d.sc,
+        a: (0.3 + rand() * 0.6) * d.al, w: 0.5 + rand() * 2.5, p: rand() * 6.28 });
+    }
   }
 
   // 미리 그려둔 꽃잎·빛 스프라이트 (색마다 하나씩)
@@ -230,17 +291,69 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     else if (shape === 3) { g.bezierCurveTo(0, 90, 4, 10, 18, 6); g.quadraticCurveTo(28, 6, 32, 18); g.quadraticCurveTo(36, 6, 46, 6); g.bezierCurveTo(60, 10, 64, 90, 32, 126); }
     else { g.bezierCurveTo(10, 100, 14, 40, 32, 0); g.bezierCurveTo(50, 40, 54, 100, 32, 126); }
   }
+  // 네온 선으로 그린 꽃잎: 색이 번지는 굵은 선 위에 밝은 가는 선을 겹침 (면은 거의 비움)
+  const PAD = 16;                 // 빛 번짐이 잘리지 않도록 둔 여백
+  const lighten = (rgb, k) => rgb.map(v => Math.round(v + (255 - v) * k)).join(",");
+  // 유리처럼 비치는 꽃잎: 밑동은 밝고, 가운데는 투명하게 색이 비치고, 가장자리는 빛남
   function makePetal(rgb, shape) {
-    const c = document.createElement("canvas"); c.width = 64; c.height = 128;
+    const c = document.createElement("canvas"); c.width = 96 + PAD * 2; c.height = 192 + PAD * 2;
     const g = c.getContext("2d");
-    const grad = g.createLinearGradient(0, 128, 0, 0);
-    grad.addColorStop(0, "rgba(255,255,255,0.8)");
-    grad.addColorStop(0.35, `rgba(${rgb},0.6)`);
-    grad.addColorStop(1, `rgba(${rgb},0.12)`);
-    g.fillStyle = grad;
+    g.translate(PAD, PAD); g.scale(1.5, 1.5);
+    const col = rgb.join(","), light = lighten(rgb, 0.6);
+    const grad = g.createLinearGradient(0, 126, 0, 0);
+    grad.addColorStop(0, "rgba(255,250,238,0.8)");
+    grad.addColorStop(0.22, `rgba(${light},0.42)`);
+    grad.addColorStop(0.65, `rgba(${col},0.14)`);
+    grad.addColorStop(1, `rgba(${light},0.34)`);
     petalPath(g, shape);
-    g.fill();
-    g.strokeStyle = "rgba(255,255,255,0.45)"; g.lineWidth = 2; g.stroke();
+    g.fillStyle = grad; g.fill();
+    // 밑동에서 퍼지는 잎맥
+    g.save(); g.clip();
+    g.strokeStyle = "rgba(255,255,255,0.2)"; g.lineWidth = 0.7;
+    for (let i = -2; i <= 2; i++) { g.beginPath(); g.moveTo(32, 126); g.quadraticCurveTo(32 + i * 9, 80, 32 + i * 13, 8); g.stroke(); }
+    g.restore();
+    // 빛나는 가장자리
+    petalPath(g, shape);
+    g.lineJoin = "round";
+    g.shadowColor = `rgba(${col},0.9)`; g.shadowBlur = 8;
+    g.strokeStyle = `rgba(${lighten(rgb, 0.75)},0.85)`; g.lineWidth = 1.5; g.stroke();
+    return c;
+  }
+  // 윤기 있는 넓은 잎
+  function makeLeaf() {
+    const c = document.createElement("canvas"); c.width = 128 + PAD * 2; c.height = 44 + PAD * 2;
+    const g = c.getContext("2d");
+    g.translate(PAD, PAD);
+    const path = () => { g.beginPath(); g.moveTo(2, 22); g.bezierCurveTo(30, -6, 92, -2, 126, 22); g.bezierCurveTo(92, 40, 34, 44, 2, 22); };
+    const grad = g.createLinearGradient(0, 22, 128, 22);
+    grad.addColorStop(0, "rgba(120,160,70,0.6)");
+    grad.addColorStop(0.6, "rgba(150,185,90,0.38)");
+    grad.addColorStop(1, "rgba(230,220,140,0.5)");
+    path(); g.fillStyle = grad; g.fill();
+    g.strokeStyle = "rgba(235,235,170,0.5)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(4, 22); g.quadraticCurveTo(60, 18, 122, 22); g.stroke();
+    path();
+    g.shadowColor = "rgba(200,220,120,0.9)"; g.shadowBlur = 7;
+    g.strokeStyle = "rgba(225,235,170,0.8)"; g.lineWidth = 1.4; g.stroke();
+    return c;
+  }
+  // 꽃 속에서 새어 나오는 빛 (가운데 밝은 빛 + 십자 반짝임)
+  function makeCore() {
+    const S = 96, c = document.createElement("canvas"); c.width = c.height = S;
+    const g = c.getContext("2d");
+    const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    grad.addColorStop(0, "rgba(255,252,240,1)");
+    grad.addColorStop(0.18, "rgba(255,236,200,0.75)");
+    grad.addColorStop(0.5, "rgba(255,214,150,0.18)");
+    grad.addColorStop(1, "rgba(255,214,150,0)");
+    g.fillStyle = grad; g.fillRect(0, 0, S, S);
+    g.globalCompositeOperation = "lighter";
+    for (const horiz of [true, false]) {
+      const ray = horiz ? g.createLinearGradient(0, 0, S, 0) : g.createLinearGradient(0, 0, 0, S);
+      ray.addColorStop(0, "rgba(255,245,220,0)"); ray.addColorStop(0.5, "rgba(255,250,235,0.8)"); ray.addColorStop(1, "rgba(255,245,220,0)");
+      g.fillStyle = ray;
+      if (horiz) g.fillRect(0, S / 2 - 1, S, 2); else g.fillRect(S / 2 - 1, 0, 2, S);
+    }
     return c;
   }
   function makeGlow(rgb) {
@@ -253,9 +366,79 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
     return c;
   }
-  const PETAL = SHAPES.map((_, si) => HUES.map(h => makePetal(h.join(","), si)));
+  const PETAL = SHAPES.map((_, si) => HUES.map(h => makePetal(h, si)));
   const GLOW = HUES.map(h => makeGlow(h.join(",")));
   const SPARK = makeGlow("233,201,142");
+  const LEAF = makeLeaf(), CORE = makeCore();
+
+  // 꽃 한 송이 그리기: 옆에서 본 유리 꽃 (꽃잎이 위로 모여 있다가 좌우로 벌어지며 속의 빛이 드러남)
+  //   o: x0,y0 뿌리 위치 / h 지금 키 / hFull 다 자란 키 / pl 꽃잎 길이 / grow 0~1 / b 핀 정도
+  //      bend, sway, tilt / shape, hue / la 밝기 / U 선 굵기 기준
+  const PETAL_ORDER = {};          // 바깥 꽃잎부터 그려서 가운데 꽃잎이 맨 앞에 오게 함
+  for (const { k } of SHAPES) PETAL_ORDER[k] = [...Array(k).keys()].sort((a, b) => Math.abs(b - (k - 1) / 2) - Math.abs(a - (k - 1) / 2));
+  function paintFlower(c, o) {
+    const { x0, y0, h, U, la } = o;
+    const tx = x0 + o.sway, ty = y0 - h;
+    const cx = x0 + o.bend * h, cy = y0 - h * 0.5;
+    c.globalCompositeOperation = "lighter";
+    c.lineCap = "round";
+
+    // 줄기: 뿌리 쪽은 금빛, 위로 갈수록 연둣빛
+    if (h > 0.5) {
+      const sg = c.createLinearGradient(x0, y0, tx, ty);
+      sg.addColorStop(0, `rgba(214,182,96,${0.9 * la})`);
+      sg.addColorStop(1, `rgba(170,205,120,${0.9 * la})`);
+      c.beginPath(); c.moveTo(x0, y0); c.quadraticCurveTo(cx, cy, tx, ty);
+      c.strokeStyle = `rgba(200,200,110,${0.13 * la})`; c.lineWidth = Math.max(3, 6 * U); c.stroke();
+      c.strokeStyle = sg; c.lineWidth = Math.max(1.2, 2.4 * U); c.stroke();
+      c.strokeStyle = `rgba(255,250,220,${0.5 * la})`; c.lineWidth = Math.max(0.5, 0.7 * U); c.stroke();
+    }
+
+    // 잎
+    if (o.grow > 0.4) {
+      const lg = ease((o.grow - 0.4) / 0.6);
+      c.globalAlpha = 0.9 * la;
+      [[0.22, -1, 0.34], [0.42, 1, 0.28]].forEach(([t, side, k]) => {
+        const m = 1 - t;
+        const lx = m * m * x0 + 2 * m * t * cx + t * t * tx, ly = m * m * y0 + 2 * m * t * cy + t * t * ty;
+        const q = o.hFull * k * lg / 128;
+        c.save(); c.translate(lx, ly); c.rotate(side > 0 ? -0.85 : Math.PI + 0.85);
+        c.drawImage(LEAF, -(PAD + 2) * q, -(PAD + 22) * q, LEAF.width * q, LEAF.height * q);
+        c.restore();
+      });
+      c.globalAlpha = 1;
+    }
+
+    // 꽃
+    if (o.grow > 0.85) {
+      const b = Math.max(0.06, o.b);
+      const len = o.pl * (0.45 + 0.55 * b) * 0.9;
+      const SH = SHAPES[o.shape], k = SH.k;
+      const wid = len * SH.wf * 1.25;
+      const spread = 0.14 + 1.1 * b;
+      const P = PETAL[o.shape][o.hue];
+      c.save(); c.translate(tx, ty);
+      c.rotate(Math.atan2(tx - cx, cy - ty) * 0.7 + o.tilt);
+      // 꽃받침
+      c.fillStyle = `rgba(206,190,110,${0.75 * la})`;
+      c.beginPath(); c.moveTo(-len * 0.07, -len * 0.02); c.quadraticCurveTo(0, len * 0.2, len * 0.07, -len * 0.02); c.closePath(); c.fill();
+      // 꽃잎 (밑동이 꽃 가운데에 오도록 붙임)
+      c.globalAlpha = 0.95 * la;
+      for (const i of PETAL_ORDER[k]) {
+        const a = k > 1 ? -spread + 2 * spread * i / (k - 1) : 0;
+        const L = len * (1 - 0.08 * Math.abs(a)), qx = wid / 96, qy = L / 192;
+        c.save(); c.rotate(a);
+        c.drawImage(P, -(PAD + 48) * qx, -(PAD + 189) * qy, P.width * qx, P.height * qy);
+        c.restore();
+      }
+      // 꽃 속의 빛
+      c.globalAlpha = la * Math.min(1, 0.35 + b);
+      const cr = len * (0.3 + 0.32 * b);
+      c.drawImage(CORE, -cr, -cr * 1.2, cr * 2, cr * 2);
+      c.restore();
+    }
+    c.globalAlpha = 1;
+  }
 
   // ================= 정원 상태 =================
   const plots = [];           // 관람객 한 명의 작은 정원
@@ -304,6 +487,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
         pl: T.pl * u * (0.85 + Math.random() * 0.3),
         open: T.open,
         bend: (Math.random() - 0.5) * 0.25,
+        tilt: (Math.random() - 0.5) * 0.24,
         phase: Math.random() * 6.28,
         delay: order.indexOf(i) * 0.28 + Math.random() * 0.25
       });
@@ -473,54 +657,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     const x0 = plot.x + f.dx * s, y0 = groundY(x0, plot.layer);
     const h = f.h * s * grow;
     const sway = reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h;
-    const tx = x0 + sway, ty = y0 - h;
-
-    // 줄기
-    ctx.globalCompositeOperation = "lighter";
-    ctx.strokeStyle = `rgba(156,203,132,${0.7 * la})`;
-    ctx.lineWidth = Math.max(1, 2.2 * u * s);
-    ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.quadraticCurveTo(x0 + f.bend * h, y0 - h * 0.5, tx, ty);
-    ctx.stroke();
-
-    // 잎
-    if (grow > 0.4) {
-      const lg = ease((grow - 0.4) / 0.6);
-      ctx.fillStyle = `rgba(130,190,110,${0.42 * la})`;
-      [[0.32, -1], [0.52, 1]].forEach(([t, side]) => {
-        const lx = x0 + (f.bend * h) * t * 1.2 + sway * t, ly = y0 - h * t;
-        const len = f.h * s * 0.2 * lg;
-        ctx.save(); ctx.translate(lx, ly); ctx.rotate(side > 0 ? -0.6 : Math.PI + 0.6);
-        ctx.beginPath(); ctx.ellipse(len * 0.5, 0, len * 0.5, len * 0.17, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.restore();
-      });
-    }
-
-    // 꽃 (또는 봉오리)
-    if (grow > 0.85) {
-      const b = Math.max(0.06, bloom);
-      const len = f.pl * s * (0.4 + 0.6 * b);
-      const SH = SHAPES[plot.shape];
-      const wid = len * SH.wf;
-      const spread = 0.1 + 0.95 * b;
-      const g = GLOW[plot.hue];
-      const gr = len * (0.8 + 0.4 * b);
-      ctx.globalAlpha = la * (0.1 + 0.22 * b);
-      ctx.drawImage(g, tx - gr, ty - gr * 0.9, gr * 2, gr * 2);
-      const P = PETAL[plot.shape][plot.hue];
-      ctx.save(); ctx.translate(tx, ty);
-      for (let i = 0; i < SH.k; i++) {
-        const a = -spread * (SH.k > 7 ? 1.25 : 1) + (2 * spread * (SH.k > 7 ? 1.25 : 1) * i) / (SH.k - 1);
-        ctx.globalAlpha = la * 0.7;
-        ctx.save(); ctx.rotate(a); ctx.drawImage(P, -wid / 2, -len, wid, len); ctx.restore();
-      }
-      ctx.restore();
-      ctx.globalAlpha = la * 0.9;
-      const cr = Math.max(2, len * 0.16);
-      ctx.drawImage(g, tx - cr, ty - cr, cr * 2, cr * 2);
-    }
-    ctx.globalAlpha = 1;
+    paintFlower(ctx, { x0, y0, h, hFull: f.h * s, bend: f.bend, sway, pl: f.pl * s, b: bloom, grow,
+      shape: plot.shape, hue: plot.hue, tilt: f.tilt || 0, la, U: u * s });
   }
 
   function draw(now) {
@@ -535,30 +673,35 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     const z = zoom;
     ctx.setTransform(DPR * z, 0, 0, DPR * z, DPR * (W / 2 - (W / 2) * z), DPR * (gyFront - gyFront * z));
 
-    // 쌓인 모래 언덕의 은은한 빛 (모래가 쌓인 만큼만 보임)
+    // 처음부터 쌓여 있는 모래밭
+    if (bed) ctx.drawImage(bed, hx0, bedY0, hx1 - hx0, bedH);
+
+    // 새로 부은 모래가 만든 둔덕 (쌓인 만큼만 솟아 보임, 바닥선은 모래밭에 묻힘)
     for (let r = Math.min(maxLayer, MAX_LAYERS - 1); r >= 0; r--) {
       const base = gy(r), sc = scaleOf(r);
-      const grad = ctx.createLinearGradient(0, base - MAXH * sc, 0, base + 30 * u * sc);
-      grad.addColorStop(0, `rgba(233,201,142,${0.10 * alphaOf(r)})`);
+      const grad = ctx.createLinearGradient(0, base - MAXH * sc, 0, base);
+      grad.addColorStop(0, `rgba(233,201,142,${0.05 * alphaOf(r)})`);
       grad.addColorStop(1, "rgba(233,201,142,0)");
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.moveTo(hx0, base + 30 * u * sc);
+      ctx.moveTo(hx0, base);
       for (let i = 0; i <= BINS; i++) {
         const x = hx0 + (hx1 - hx0) * i / BINS;
         ctx.lineTo(x, base - height[Math.min(BINS - 1, i)] * sc);
       }
-      ctx.lineTo(hx1, base + 30 * u * sc);
+      ctx.lineTo(hx1, base);
       ctx.closePath();
       ctx.fill();
     }
 
-    // 반짝이는 흙
-    for (const p of soil) {
-      const a = p.a * (reduceMotion ? 0.7 : 0.45 + 0.55 * Math.sin(now * p.w + p.p));
-      if (a <= 0.02) continue;
-      ctx.globalAlpha = a;
-      ctx.drawImage(SPARK, p.x - p.s * 2, p.y - p.s * 2, p.s * 4, p.s * 4);
+    // 반짝이는 모래알 (모래밭 + 새로 쌓인 모래)
+    for (const list of [bedTw, soil]) {
+      for (const p of list) {
+        const a = p.a * (reduceMotion ? 0.7 : 0.45 + 0.55 * Math.sin(now * p.w + p.p));
+        if (a <= 0.02) continue;
+        ctx.globalAlpha = a;
+        ctx.drawImage(SPARK, p.x - p.s * 2, p.y - p.s * 2, p.s * 4, p.s * 4);
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -659,7 +802,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getFirestore, collection, addDoc, query, orderBy, limit, onSnapshot }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  try {
+  // 주소 뒤에 ?local 을 붙이면 Firebase 없이 이 화면에서만 동작 (디자인 확인·시험용)
+  if (!new URLSearchParams(location.search).has("local")) try {
     const db = getFirestore(initializeApp(firebaseConfig));
     window.gardenRemote = {
       send: v => addDoc(collection(db, "entries"), { v, t: Date.now() }),
