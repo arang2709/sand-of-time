@@ -94,7 +94,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // 꽃의 색: 관람객마다 고유한 씨앗
-  const HUES = [[205,180,255],[255,185,205],[255,215,150],[170,215,255],[255,240,220]];
+  const HUES = [[165,100,255],[255,70,150],[255,170,40],[60,175,255],[60,225,170]];
   // 꽃 모양 5가지: 꽃잎 수(k)와 꽃잎 폭(wf)
   const SHAPES = [
     { name: "물방울", k: 4, wf: 0.5 },
@@ -208,12 +208,12 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     const c = document.createElement("canvas"); c.width = 96 + PAD * 2; c.height = 192 + PAD * 2;
     const g = c.getContext("2d");
     g.translate(PAD, PAD); g.scale(1.5, 1.5);
-    const col = rgb.join(","), light = lighten(rgb, 0.6);
+    const col = rgb.join(","), light = lighten(rgb, 0.3);
     const grad = g.createLinearGradient(0, 126, 0, 0);
-    grad.addColorStop(0, "rgba(255,250,238,0.8)");
-    grad.addColorStop(0.22, `rgba(${light},0.42)`);
-    grad.addColorStop(0.65, `rgba(${col},0.14)`);
-    grad.addColorStop(1, `rgba(${light},0.34)`);
+    grad.addColorStop(0, `rgba(${lighten(rgb, 0.55)},0.85)`);
+    grad.addColorStop(0.22, `rgba(${light},0.55)`);
+    grad.addColorStop(0.65, `rgba(${col},0.3)`);
+    grad.addColorStop(1, `rgba(${light},0.45)`);
     petalPath(g, shape);
     g.fillStyle = grad; g.fill();
     // 밑동에서 퍼지는 잎맥
@@ -225,7 +225,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     petalPath(g, shape);
     g.lineJoin = "round";
     g.shadowColor = `rgba(${col},0.9)`; g.shadowBlur = 8;
-    g.strokeStyle = `rgba(${lighten(rgb, 0.75)},0.85)`; g.lineWidth = 1.5; g.stroke();
+    g.strokeStyle = `rgba(${lighten(rgb, 0.35)},0.9)`; g.lineWidth = 1.6; g.stroke();
     return c;
   }
   // 윤기 있는 넓은 잎
@@ -629,27 +629,29 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
       target = pr < 0 ? 0 : Math.min(pv.v, Math.max(1, Math.ceil(pv.v * pr)));
     } else if (pv.v) target = pv.v;
     else if (now - pv.start > 0.5) target = Math.max(1, pv.live);
-    while (pv.fl.length < target) pv.fl.push({ born: now + (pv.fl.length ? Math.random() * 0.15 : 0), x: null,
-      k: 0.85 + Math.random() * 0.3, hk: 0.72 + Math.random() * 0.34, bend: (Math.random() - 0.5) * 0.25,
-      phase: Math.random() * 6.28, tilt: (Math.random() - 0.5) * 0.24 });
+    // 새 꽃은 한 자리에서 가운데부터 바깥으로 번지며 돋아남 (이미 핀 꽃은 밀려나지 않음)
+    if (pv.rot === undefined) pv.rot = Math.random() * 6.28;
+    while (pv.fl.length < target) {
+      const i = pv.fl.length, r = 0.95 * Math.sqrt(i + 0.3) * (0.9 + Math.random() * 0.2), a = i * 2.39996323 + pv.rot;
+      pv.fl.push({ born: now + (i ? Math.random() * 0.15 : 0), cx: Math.cos(a) * r, cz: Math.sin(a) * r,
+        k: 0.85 + Math.random() * 0.3, hk: i ? 0.72 + Math.random() * 0.3 : 1.05, bend: (Math.random() - 0.5) * 0.25,
+        phase: Math.random() * 6.28, tilt: (Math.random() - 0.5) * 0.24 });
+      pv.fl.sort((p, q) => q.cz - p.cz);       // 뒤에 있는 꽃부터 그림
+    }
 
     // 송이 수가 구간을 넘으면 꽃 전체가 한 단계 커짐
     const n = pv.fl.length, T = TIERS[tierOf(Math.max(1, n))], kk = Math.min(1, dt * 3);
     for (const key in pv.cur) pv.cur[key] += (T[key] - pv.cur[key]) * kk;
     const fitN = Math.max(n, pv.v || 0, 1);
-    pv.ps += (Math.min(1.6, PW * 0.84 / (((fitN - 1) * pv.cur.sp + 120) * pu)) - pv.ps) * kk;
+    pv.ps += (Math.min(1.6, PW * 0.84 / ((2 * 0.95 * Math.sqrt(fitN + 0.3) * pv.cur.sp + 120) * pu)) - pv.ps) * kk;
     const U = pu * pv.ps;
-    pv.fl.forEach((f, i) => {
-      const tx = (i - (n - 1) / 2) * pv.cur.sp * U;
-      f.x = f.x === null ? tx : f.x + (tx - f.x) * Math.min(1, dt * 4);
-    });
 
     // 모래
     const pouring = now < pv.until && !pv.cancel;
     if (pouring) {
       const rise = Math.min(1, (now - pv.start) / 0.6), fall = pv.until === Infinity ? 1 : clamp((pv.until - now) / 0.8, 0, 1);
       const rate = (reduceMotion ? 60 : 220 + n * 22) * Math.min(rise, fall);
-      const half = ((n - 1) * pv.cur.sp * 0.5 + 100) * U;
+      const half = (0.95 * Math.sqrt(n + 0.3) * pv.cur.sp + 100) * U;
       for (let i = Math.floor(rate * dt + Math.random()); i > 0 && pgrains.length < 1400; i--) {
         const near = Math.random() < 0.72;
         pgrains.push({ x: near ? PW / 2 + (Math.random() + Math.random() - 1) * half : Math.random() * PW,
@@ -702,10 +704,13 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     const U = pu * pv.ps, C = pv.cur;
     for (const f of pv.fl) {
       const age = now - f.born; if (age < 0) continue;
-      const grow = ease(age / 1.8), hFull = C.h * f.hk * U, h = hFull * grow;
-      paintFlower(pc, { x0: PW / 2 + f.x, y0: pgy, h, hFull, bend: f.bend,
-        sway: reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h, pl: C.pl * f.k * U,
-        b: ease((age - 1.2) / 1.8) * C.open, grow, shape: pv.shape, hue: pv.hue, tilt: f.tilt, la: 1, U });
+      // 앞(아래)에 있는 꽃은 조금 크고 밝게, 뒤(위)에 있는 꽃은 조금 작고 흐리게
+      const z = f.cz * C.sp, dsc = clamp(1 - z * 0.0028, 0.75, 1.25), Uf = U * dsc;
+      const grow = ease(age / 1.8), hFull = C.h * f.hk * Uf, h = hFull * grow;
+      paintFlower(pc, { x0: PW / 2 + f.cx * C.sp * U, y0: pgy - z * 0.3 * U, h, hFull, bend: f.bend,
+        sway: reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h, pl: C.pl * f.k * Uf,
+        b: ease((age - 1.2) / 1.8) * C.open, grow, shape: pv.shape, hue: pv.hue, tilt: f.tilt,
+        la: clamp(1.1 - z * 0.004, 0.6, 1), U: Uf });
     }
 
     pc.globalCompositeOperation = "lighter";

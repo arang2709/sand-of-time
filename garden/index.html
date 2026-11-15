@@ -86,7 +86,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // 꽃의 색: 관람객마다 고유한 씨앗
-  const HUES = [[205,180,255],[255,185,205],[255,215,150],[170,215,255],[255,240,220]];
+  const HUES = [[165,100,255],[255,70,150],[255,170,40],[60,175,255],[60,225,170]];
   // 꽃 모양 5가지: 꽃잎 수(k)와 꽃잎 폭(wf)
   const SHAPES = [
     { name: "물방울", k: 4, wf: 0.5 },
@@ -299,12 +299,12 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     const c = document.createElement("canvas"); c.width = 96 + PAD * 2; c.height = 192 + PAD * 2;
     const g = c.getContext("2d");
     g.translate(PAD, PAD); g.scale(1.5, 1.5);
-    const col = rgb.join(","), light = lighten(rgb, 0.6);
+    const col = rgb.join(","), light = lighten(rgb, 0.3);
     const grad = g.createLinearGradient(0, 126, 0, 0);
-    grad.addColorStop(0, "rgba(255,250,238,0.8)");
-    grad.addColorStop(0.22, `rgba(${light},0.42)`);
-    grad.addColorStop(0.65, `rgba(${col},0.14)`);
-    grad.addColorStop(1, `rgba(${light},0.34)`);
+    grad.addColorStop(0, `rgba(${lighten(rgb, 0.55)},0.85)`);
+    grad.addColorStop(0.22, `rgba(${light},0.55)`);
+    grad.addColorStop(0.65, `rgba(${col},0.3)`);
+    grad.addColorStop(1, `rgba(${light},0.45)`);
     petalPath(g, shape);
     g.fillStyle = grad; g.fill();
     // 밑동에서 퍼지는 잎맥
@@ -316,7 +316,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     petalPath(g, shape);
     g.lineJoin = "round";
     g.shadowColor = `rgba(${col},0.9)`; g.shadowBlur = 8;
-    g.strokeStyle = `rgba(${lighten(rgb, 0.75)},0.85)`; g.lineWidth = 1.5; g.stroke();
+    g.strokeStyle = `rgba(${lighten(rgb, 0.35)},0.9)`; g.lineWidth = 1.6; g.stroke();
     return c;
   }
   // 윤기 있는 넓은 잎
@@ -453,11 +453,17 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const hashHue = t => Math.abs(Math.floor(t / 7) * 2654435761 % HUES.length);
   const hashShape = t => Math.abs(Math.floor(t / 13) * 2246822519 % SHAPES.length);
 
+  // 꽃 무리 안에서 i번째 꽃의 자리 (해바라기 씨앗 배열, 앞뒤 깊이는 납작하게 눌러서 보여줌)
+  const clusterR = v => 0.95 * Math.sqrt(v + 0.3);
+  function clusterPos(i, rot, sp) {
+    const r = 0.95 * Math.sqrt(i + 0.3) * sp * (0.9 + Math.random() * 0.2), a = i * 2.39996323 + rot;
+    return { x: Math.cos(a) * r, z: Math.sin(a) * r * 0.32 };
+  }
   function placePlot(v) {
     const T = TIERS[tierOf(v)];
     for (let r = 0; r < MAX_LAYERS; r++) {
       const s = scaleOf(r);
-      const width = ((v - 1) * T.sp + 50) * u * s;
+      const width = (2 * clusterR(v) * T.sp + 50) * u * s;
       const half = W / (2 * zoomFor(r)) - 24 * u;
       const lo = W / 2 - half + width / 2, hi = W / 2 + half - width / 2;
       if (hi <= lo) continue;
@@ -478,20 +484,22 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   function makePlot(v, t, spot) {
     const tier = tierOf(v), T = TIERS[tier];
     const flowers = [];
-    const tallest = Math.floor(Math.random() * v);
-    const order = [...Array(v).keys()].sort(() => Math.random() - 0.5);
+    const rot = Math.random() * 6.28;
     for (let i = 0; i < v; i++) {
+      // 한 자리에서 모여 피어나는 꽃 무리: 가운데부터 바깥으로, 앞뒤로도 퍼짐
+      const p = clusterPos(i, rot, T.sp);
       flowers.push({
-        dx: (i - (v - 1) / 2) * T.sp * u * (0.85 + Math.random() * 0.3),
-        h: T.h * u * (i === tallest ? 1.08 : 0.7 + Math.random() * 0.25),
-        pl: T.pl * u * (0.85 + Math.random() * 0.3),
+        dx: p.x * u, dz: p.z * u,
+        h: T.h * u * (i === 0 ? 1.08 : 0.7 + Math.random() * 0.25) * (1 + p.z * 0.002),
+        pl: T.pl * u * (0.85 + Math.random() * 0.3) * (1 + p.z * 0.002),
         open: T.open,
         bend: (Math.random() - 0.5) * 0.25,
         tilt: (Math.random() - 0.5) * 0.24,
         phase: Math.random() * 6.28,
-        delay: order.indexOf(i) * 0.28 + Math.random() * 0.25
+        delay: i * 0.22 + Math.random() * 0.3
       });
     }
+    flowers.sort((a, b) => a.dz - b.dz);      // 뒤에 있는 꽃부터 그림
     return { v, t, x: spot.x, layer: spot.layer, hue: hashHue(t), shape: hashShape(t), flowers, born: Infinity };
   }
 
@@ -654,7 +662,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     if (age < 0) return;
     const grow = ease(age / 2.2);
     const bloom = ease((age - 1.6) / 2.4) * f.open;
-    const x0 = plot.x + f.dx * s, y0 = groundY(x0, plot.layer);
+    const x0 = plot.x + f.dx * s, y0 = groundY(x0, plot.layer) + (f.dz || 0) * s;
     const h = f.h * s * grow;
     const sway = reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h;
     paintFlower(ctx, { x0, y0, h, hFull: f.h * s, bend: f.bend, sway, pl: f.pl * s, b: bloom, grow,
