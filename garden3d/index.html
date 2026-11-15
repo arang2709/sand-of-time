@@ -55,6 +55,15 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   font-size:clamp(15px,2.2vh,22px);color:var(--ink);opacity:0;transition:opacity 1.2s;pointer-events:none}
 #cap.on{opacity:.9}
 .idle #tools,.idle #hud{opacity:0}
+#tools{flex-wrap:wrap;justify-content:flex-end}
+#tools button{white-space:nowrap}
+/* 휴대폰처럼 좁은 화면: 버튼은 위에 한 줄로 작게, 상태 문구는 아래로 */
+@media (max-width:640px){
+  #tools{left:calc(10px + env(safe-area-inset-left,0px));right:calc(10px + env(safe-area-inset-right,0px));
+    top:calc(10px + env(safe-area-inset-top,0px));gap:6px;justify-content:center}
+  #tools button{padding:6px 10px;font-size:12px}
+  #hud{top:auto;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:0;right:0;text-align:center;font-size:12px}
+}
 </style>
 </head>
 <body>
@@ -1044,6 +1053,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     catch (e) { if (e.name !== "NotFoundError") { sensorStatus = "센서를 열지 못했어요. 시리얼 모니터가 켜져 있으면 닫고 다시 눌러 주세요."; console.error(e); } }
   }
   document.getElementById("serial").addEventListener("click", connectSerial);
+  // 휴대폰·사파리처럼 센서(USB) 연결이 안 되는 브라우저에서는 버튼을 숨김
+  if (!("serial" in navigator)) document.getElementById("serial").style.display = "none";
   if ("serial" in navigator) navigator.serial.getPorts().then(ps => { if (ps[0]) openPort(ps[0]).catch(() => {}); });
 
   // ================= 화면 크기 =================
@@ -1052,7 +1063,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     PW = window.innerWidth; PH = window.innerHeight;
     renderer.setPixelRatio(PD);
     renderer.setSize(PW, PH, false);
-    camera.aspect = PW / PH; camera.updateProjectionMatrix();
+    camera.aspect = PW / PH;
+    // 세로 화면에서도 좌우가 너무 좁아지지 않게 시야를 넓힘 (가로 시야 최소 약 50도)
+    camera.fov = Math.min(75, Math.max(42, 2 * Math.atan(Math.tan(25 * Math.PI / 180) / camera.aspect) * 180 / Math.PI));
+    camera.updateProjectionMatrix();
     FOG.uPx.value = PH * PD / (2 * Math.tan(camera.fov * Math.PI / 360));
     pourCanvas.width = bloomCanvas.width = Math.round(PW * PD); pourCanvas.height = bloomCanvas.height = Math.round(PH * PD);
     pu = Math.min(PH, PW * 1.6) / 900;

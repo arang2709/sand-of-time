@@ -48,6 +48,15 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 #tools button{background:rgba(18,14,11,.6);border:1px solid rgba(239,230,216,.3);color:var(--ink);
   border-radius:999px;padding:7px 14px;font-size:13px;cursor:pointer}
 .idle #tools,.idle #hud{opacity:0}
+#tools{flex-wrap:wrap;justify-content:flex-end}
+#tools button{white-space:nowrap}
+/* 휴대폰처럼 좁은 화면: 버튼은 위에 한 줄로 작게, 상태 문구는 아래로 */
+@media (max-width:640px){
+  #tools{left:calc(10px + env(safe-area-inset-left,0px));right:calc(10px + env(safe-area-inset-right,0px));
+    top:calc(10px + env(safe-area-inset-top,0px));gap:6px;justify-content:center}
+  #tools button{padding:6px 10px;font-size:12px}
+  #hud{top:auto;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:0;right:0;text-align:center;font-size:12px}
+}
 </style>
 </head>
 <body>
@@ -599,6 +608,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     catch (e) { if (e.name !== "NotFoundError") { sensorStatus = "센서를 열지 못했어요. 시리얼 모니터가 켜져 있으면 닫고 다시 눌러 주세요."; console.error(e); } }
   }
   document.getElementById("serial").addEventListener("click", connectSerial);
+  // 휴대폰·사파리처럼 센서(USB) 연결이 안 되는 브라우저에서는 버튼을 숨김
+  if (!("serial" in navigator)) document.getElementById("serial").style.display = "none";
   // 한 번 허락한 아두이노는 다음부터 자동으로 연결
   if ("serial" in navigator) navigator.serial.getPorts().then(ps => { if (ps[0]) openPort(ps[0]).catch(() => {}); });
 
