@@ -44,6 +44,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 #gl{touch-action:none;cursor:grab}
 #gl:active{cursor:grabbing}
 #pour{pointer-events:none;opacity:0}
+#bloom{pointer-events:none}
 #hud{position:absolute;left:calc(20px + env(safe-area-inset-left,0px));top:calc(16px + env(safe-area-inset-top,0px));
   font-size:14px;color:var(--dim);pointer-events:none;transition:opacity .6s}
 #tools{position:absolute;right:calc(14px + env(safe-area-inset-right,0px));top:calc(12px + env(safe-area-inset-top,0px));
@@ -72,6 +73,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 <section id="show" aria-label="정원">
   <canvas id="gl"></canvas>
   <canvas id="pour"></canvas>
+  <canvas id="bloom"></canvas>
   <div id="cap"></div>
   <div id="hud"></div>
   <div id="tools">
@@ -116,6 +118,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   };
   const tierOf = v => v <= 2 ? 1 : v <= 4 ? 2 : v <= 6 ? 3 : 4;
   const ease = t => t <= 0 ? 0 : t >= 1 ? 1 : 1 - Math.pow(1 - t, 3);
+  const smooth = t => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);   // 천천히 시작해 천천히 멈춤 (자라는 움직임용)
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   const hashHue = t => Math.abs(Math.floor(t / 7) * 2654435761 % HUES.length);
   const hashShape = t => Math.abs(Math.floor(t / 13) * 2246822519 % SHAPES.length);
@@ -130,6 +133,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const glCanvas = document.getElementById("gl");
   const pourCanvas = document.getElementById("pour");
   const pc = pourCanvas.getContext("2d");
+  const bloomCanvas = document.getElementById("bloom");
+  const bc = bloomCanvas.getContext("2d");
   buttons.forEach(b => {
     const v = Number(b.dataset.v);
     b.style.setProperty("--fill", (0.08 + 0.07 * v).toFixed(2));
@@ -149,8 +154,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   // 정원 비우기: 이 화면에 핀 꽃을 모두 치움 (기록은 Firebase에 그대로 남고, 기다리던 입력은 이어서 진행)
   document.getElementById("clear").addEventListener("click", () => {
     if (!confirm("정원의 꽃을 모두 비울까요?")) return;
-    plots.length = 0; flowerCount = 0; slot = 0; gardenR = 2;
-    fGeo.instanceCount = 0;
+    plots.length = 0; flowerCount = 0; slot = 0; gardenR = 2; meteors.length = 0;
+    fGeo.instanceCount = 0; tr = null;
   });
   document.getElementById("full").addEventListener("click", () => {
     if (document.fullscreenElement) document.exitFullscreen(); else showEl.requestFullscreen?.();
@@ -311,8 +316,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
 
     // 잎
-    if (o.grow > 0.4) {
-      const lg = ease((o.grow - 0.4) / 0.6);
+    if (o.grow > 0.35) {
+      const lg = smooth((o.grow - 0.35) / 0.65);
       c.globalAlpha = 0.9 * la;
       [[0.22, -1, 0.34], [0.42, 1, 0.28]].forEach(([t, side, k]) => {
         const m = 1 - t;
@@ -326,9 +331,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
 
     // 꽃
-    if (o.grow > 0.85) {
+    const hs = smooth((o.grow - 0.45) / 0.55);          // 꽃머리가 맺히는 정도
+    if (hs > 0.01) {
       const b = Math.max(0.06, o.b);
-      const len = o.pl * (0.45 + 0.55 * b) * 0.9;
+      const len = o.pl * (0.45 + 0.55 * b) * 0.9 * (0.15 + 0.85 * hs);
       const SH = SHAPES[o.shape], k = SH.k;
       const wid = len * SH.wf * 1.25;
       const spread = 0.14 + 1.1 * b;
@@ -348,7 +354,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
         c.restore();
       }
       // 꽃 속의 빛
-      c.globalAlpha = la * Math.min(1, 0.35 + b);
+      c.globalAlpha = la * Math.min(1, 0.35 + b) * hs;
       const cr = len * (0.3 + 0.32 * b);
       c.drawImage(CORE, -cr, -cr * 1.2, cr * 2, cr * 2);
       c.restore();
@@ -397,11 +403,12 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 800);
   const FOG = { uFogNear: { value: 5 }, uFogK: { value: 0.05 }, uTime: { value: 0 }, uPx: { value: 800 } };
 
+  const HORIZON = new THREE.Color(0.125, 0.095, 0.07);
   // --- 모래 바닥 ---
   const sandTex = new THREE.CanvasTexture(makeSandTile());
   sandTex.wrapS = sandTex.wrapT = THREE.RepeatWrapping;
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), new THREE.ShaderMaterial({
-    uniforms: { map: { value: sandTex }, uWall: { value: new THREE.Color(0x120E0B) }, ...FOG },
+    uniforms: { map: { value: sandTex }, uWall: { value: HORIZON }, ...FOG },
     vertexShader: `varying vec3 vW;
       void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: `uniform sampler2D map; uniform vec3 uWall; uniform float uFogNear, uFogK; varying vec3 vW;
@@ -443,6 +450,127 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
       }`));
     pts.frustumCulled = false;
     scene.add(pts);
+  }
+
+  // --- 밤하늘: 지평선은 은은한 모래빛, 위로 갈수록 깊은 밤색 ---
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), new THREE.ShaderMaterial({
+    uniforms: { uHor: { value: HORIZON }, uTop: { value: new THREE.Color(0.03, 0.03, 0.055) } },
+    vertexShader: `varying vec3 vW;
+      void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `uniform vec3 uHor, uTop; varying vec3 vW;
+      void main(){ float e = normalize(vW - cameraPosition).y; gl_FragColor = vec4(mix(uHor, uTop, pow(smoothstep(-0.005, 0.09, e), 0.6)), 1.0); }`,
+    side: THREE.BackSide, depthWrite: false
+  }));
+  sky.renderOrder = -2;
+  scene.add(sky);
+
+  // --- 별: 하늘에 붙어 카메라와 함께 움직이며 반짝임 ---
+  const stars = (() => {
+    const N = 1400, pos = new Float32Array(N * 3), info = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const a = Math.random() * 6.2832, e = Math.asin(0.06 + Math.random() * 0.94);
+      pos[i * 3] = Math.cos(a) * Math.cos(e) * 350; pos[i * 3 + 1] = Math.sin(e) * 350; pos[i * 3 + 2] = Math.sin(a) * Math.cos(e) * 350;
+      info[i * 3] = 1.0 + Math.pow(Math.random(), 3) * 2.8; info[i * 3 + 1] = Math.random() * 6.28; info[i * 3 + 2] = 0.5 + Math.random() * 2;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("aS", new THREE.BufferAttribute(info, 3));
+    const p = new THREE.Points(g, new THREE.ShaderMaterial({
+      uniforms: { uTime: FOG.uTime, uPR: { value: 1 } },
+      vertexShader: `attribute vec3 aS; uniform float uTime, uPR; varying float vA;
+        void main(){
+          vA = (0.35 + 0.65 * (0.5 + 0.5 * sin(uTime * aS.z + aS.y))) * smoothstep(3.0, 18.0, position.y);
+          gl_PointSize = aS.x * uPR;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `varying float vA;
+        void main(){ float s = smoothstep(0.5, 0.0, length(gl_PointCoord - 0.5)); gl_FragColor = vec4(vec3(0.92, 0.9, 1.0) * s * vA, 1.0); }`,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+    }));
+    p.renderOrder = -1;
+    p.frustumCulled = false;
+    scene.add(p);
+    return p;
+  })();
+
+  // --- 반딧불이: 정원 위를 천천히 떠다니며 깜빡임 (정원이 넓어지면 함께 넓게 퍼짐) ---
+  const FF = { uGR: { value: 4 } };
+  {
+    const N = reduceMotion ? 90 : 260, pos = new Float32Array(N * 3), info = new Float32Array(N * 4);
+    for (let i = 0; i < N; i++) {
+      const r = Math.sqrt(Math.random()), a = Math.random() * 6.2832;
+      pos[i * 3] = Math.cos(a) * r; pos[i * 3 + 1] = 0.25 + Math.random() * 2.2; pos[i * 3 + 2] = Math.sin(a) * r;
+      info[i * 4] = Math.random() * 6.28; info[i * 4 + 1] = 0.15 + Math.random() * 0.35;
+      info[i * 4 + 2] = 0.4 + Math.random() * 1.1; info[i * 4 + 3] = 0.09 + Math.random() * 0.1;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("aF", new THREE.BufferAttribute(info, 4));
+    const p = new THREE.Points(g, new THREE.ShaderMaterial({
+      uniforms: { ...FOG, ...FF },
+      vertexShader: `attribute vec4 aF; uniform float uTime, uPx, uGR, uFogNear, uFogK; varying float vA;
+        void main(){
+          float t = uTime * aF.y, ph = aF.x;
+          vec3 p = vec3(position.x * uGR, position.y, position.z * uGR);
+          p += vec3(sin(t + ph) * 0.9 + sin(t * 0.37 + ph * 2.0) * 0.6,
+                    sin(t * 0.8 + ph * 1.3) * 0.35,
+                    cos(t * 0.9 + ph) * 0.9 + cos(t * 0.29 + ph * 1.7) * 0.6);
+          vec4 mv = viewMatrix * vec4(p, 1.0);
+          float blink = pow(max(0.0, sin(uTime * aF.z + ph * 3.0)), 3.0);
+          vA = (0.12 + 0.88 * blink) * exp(-max(0.0, -mv.z - uFogNear) * uFogK * 0.8);
+          gl_PointSize = clamp(aF.w * uPx / -mv.z, 1.5, 26.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `varying float vA;
+        void main(){
+          float d = length(gl_PointCoord - 0.5);
+          float core = smoothstep(0.16, 0.0, d), halo = smoothstep(0.5, 0.0, d);
+          gl_FragColor = vec4((vec3(0.78, 1.0, 0.5) * halo * halo * 0.55 + vec3(1.0, 1.0, 0.85) * core) * vA, 1.0);
+        }`,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+    }));
+    p.frustumCulled = false;
+    scene.add(p);
+  }
+  // 하늘과 별, 반딧불이 범위를 카메라·정원에 맞춤
+  function updateSky() {
+    sky.position.copy(camera.position);
+    stars.position.copy(camera.position);
+    stars.material.uniforms.uPR.value = PD;
+    FF.uGR.value = gardenR + 2.5;
+  }
+
+  // --- 별똥별: 가끔 하늘을 가로지름 (3D 정원 장면에서만) ---
+  const meteors = [];
+  let nextMeteor = 4;
+  function drawMeteors(now) {
+    if (reduceMotion) return;
+    if (now > nextMeteor) {
+      nextMeteor = now + 5 + Math.random() * 9;
+      const dir = Math.random() < 0.5 ? -1 : 1, ang = (0.32 + Math.random() * 0.3);
+      meteors.push({ x: PW * (dir < 0 ? 0.35 + Math.random() * 0.6 : 0.05 + Math.random() * 0.6), y: PH * (0.03 + Math.random() * 0.22),
+        vx: Math.cos(ang) * dir, vy: Math.sin(ang), sp: PW * (0.35 + Math.random() * 0.25), len: PW * (0.08 + Math.random() * 0.08),
+        born: now, life: 0.9 + Math.random() * 0.6 });
+    }
+    bc.globalCompositeOperation = "lighter";
+    bc.lineCap = "round";
+    for (let i = meteors.length - 1; i >= 0; i--) {
+      const m = meteors[i], t = now - m.born;
+      if (t > m.life) { meteors.splice(i, 1); continue; }
+      const a = Math.sin(Math.PI * t / m.life);
+      const hx = m.x + m.vx * m.sp * t, hy = m.y + m.vy * m.sp * t;
+      const tx = hx - m.vx * m.len, ty = hy - m.vy * m.len;
+      const g = bc.createLinearGradient(hx, hy, tx, ty);
+      g.addColorStop(0, `rgba(255,248,230,${0.9 * a})`);
+      g.addColorStop(0.25, `rgba(255,225,170,${0.35 * a})`);
+      g.addColorStop(1, "rgba(255,210,150,0)");
+      bc.strokeStyle = g; bc.lineWidth = 1.6;
+      bc.beginPath(); bc.moveTo(hx, hy); bc.lineTo(tx, ty); bc.stroke();
+      bc.globalAlpha = a;
+      bc.drawImage(SPARK, hx - 5, hy - 5, 10, 10);
+      bc.globalAlpha = 1;
+    }
+    bc.globalCompositeOperation = "source-over";
   }
 
   // --- 새 꽃 위로 내리는 모래 ---
@@ -519,23 +647,124 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     fGeo.instanceCount = Math.min(slot, MAX_FLOWERS);
     iPos.needsUpdate = iInfo.needsUpdate = true;
   }
-  // 관람객 한 명 = 꽃 한 무리. 해바라기 씨앗처럼 가운데에서 바깥으로 번져 나감
-  function plantPlot(v, t, instant, now) {
-    const n = plots.length;
-    const r = 1.75 * Math.sqrt(n + 0.25), th = n * 2.39996323 + Math.random() * 0.3;
-    const x = Math.cos(th) * r, z = Math.sin(th) * r;
+  // 관람객 한 명 = 꽃 한 무리. 이미 있는 무리들 곁의 빈자리를 골라 들판처럼 불규칙하게 번져 나감
+  //   (가운데에 가까울수록, 이웃과 맞닿을수록 좋은 자리. 조금씩 운에 맡겨 오솔길·빈터도 생김)
+  function findSpot(rad) {
+    if (!plots.length) return { x: 0, z: 0 };
+    let best = null, bestScore = Infinity;
+    for (let k = 0; k < 70; k++) {
+      const a = Math.random() * 6.2832, d = Math.random() * (gardenR + rad) * 1.05;
+      const x = Math.cos(a) * d, z = Math.sin(a) * d;
+      let near = Infinity, ok = true;
+      for (const p of plots) {
+        const gap = Math.hypot(p.x - x, p.z - z) - p.rad - rad;
+        if (gap < -0.2 * Math.min(rad, p.rad)) { ok = false; break; }
+        near = Math.min(near, gap);
+      }
+      if (!ok) continue;
+      const score = Math.hypot(x, z) * 0.8 + Math.max(0, near) * 1.6 + Math.random() * 1.4;
+      if (score < bestScore) { bestScore = score; best = { x, z }; }
+    }
+    if (!best) { const a = Math.random() * 6.2832, d = gardenR + rad * 0.6; best = { x: Math.cos(a) * d, z: Math.sin(a) * d }; }
+    return best;
+  }
+  //   deferred: 자리만 정해 두고 꽃은 나중에(피는 장면이 끝난 뒤) 심음
+  function plantPlot(v, t, instant, now, deferred = false) {
     const tier = tierOf(v), hue = hashHue(t), shape = hashShape(t);
     const idx = (tier - 1) * 25 + shape * 5 + hue, sp = TIERS[tier].sp / WU * 0.85, rot = Math.random() * 6.28;
+    const rad = sp * Math.sqrt(v + 0.3) + 0.3;
+    const { x, z } = findSpot(rad);
+    const fl = [];
     for (let j = 0; j < v; j++) {
-      const rr = sp * Math.sqrt(j + 0.3), a = j * 2.39996323 + rot;
+      const rr = sp * Math.sqrt(j + 0.3) * (0.8 + Math.random() * 0.4), a = j * 2.39996323 + rot + (Math.random() - 0.5) * 0.6;
       const sc = (0.74 + Math.random() * 0.32) * (Math.random() < 0.5 ? -1 : 1);
-      addFlower(x + Math.cos(a) * rr, z + Math.sin(a) * rr, idx, sc, instant ? -100 : now + j * 0.18);
+      const f = { x: x + Math.cos(a) * rr, z: z + Math.sin(a) * rr, sc, delay: j * 0.18 + Math.random() * 0.2 };
+      fl.push(f);
+      if (!deferred) addFlower(f.x, f.z, idx, sc, instant ? -100 : now + f.delay);
     }
-    const plot = { v, t, x, z };
+    const plot = { v, t, x, z, rad, tier, hue, shape, idx, fl };
     plots.push(plot);
     flowerCount += v;
-    gardenR = Math.max(gardenR, r + 1.4);
+    gardenR = Math.max(gardenR, Math.hypot(x, z) + rad + 0.6);
     return plot;
+  }
+
+  // --- 붓는 화면에서 핀 꽃이 3D 정원 속 제자리로 내려앉는 장면 ---
+  //   붓는 화면의 꽃을 그대로 이어 그리면서, 화면 위치와 크기를 정원 속 자리로 천천히 옮김
+  //   다 내려앉으면 정원의 다른 꽃들과 같은 방식(한 번에 그리는 그림판)으로 넘겨 줌
+  const FOCUS_D = 7;                   // 새 꽃을 보여줄 때 카메라 거리
+  const FLY_S = 2.4, HAND_S = 6.5;     // 내려앉는 데 걸리는 시간, 정원으로 넘겨 주는 시각
+  let tr = null;
+  const bv = new THREE.Vector3();
+  const mix = (a, b, m) => a + (b - a) * m;
+  const mixLog = (a, b, m) => Math.exp(mix(Math.log(Math.max(a, 1e-4)), Math.log(Math.max(b, 1e-4)), m));
+  function startTransition(now) {
+    const n = pv.fl.length, plot = plantPlot(n, pv.t, false, 0, true);
+    focus = { x: plot.x, z: plot.z, until: now + 15 };
+    snapCam();
+    // 붓는 화면의 배치(좌우 cx, 앞뒤 cz)를 그대로 정원 바닥에 옮김: 카메라 기준 오른쪽·안쪽 방향
+    const T = TIERS[plot.tier], W1 = T.sp / WU * 0.9, y = cam.yaw;
+    const rx = Math.cos(y), rz = -Math.sin(y), ax = -Math.sin(y), az = -Math.cos(y);
+    tr = { start: now, plot, items: pv.fl.map(f => ({ f, a: pourParams(f, now),
+      w: { x: plot.x + (rx * f.cx + ax * f.cz) * W1, z: plot.z + (rz * f.cx + az * f.cz) * W1,
+        sc: clamp(f.hk, 0.7, 1.1) * (f.bend < 0 ? -1 : 1) } })) };
+    rainOn(plot.x, plot.z, 1.4, now + FLY_S * 0.6);
+    turnUntil = now + HAND_S + 3;
+    showCaption(`오늘, ${n}명의 나`, FLY_S, HAND_S + 2.5);
+    pv.planted = true;
+  }
+  function drawBloom(now) {
+    bc.setTransform(PD, 0, 0, PD, 0, 0);
+    bc.clearRect(0, 0, PW, PH);
+    if (!pv) drawMeteors(now);
+    if (!tr) return;
+    camera.updateMatrixWorld();
+    const P = tr.plot, T = TIERS[P.tier];
+    const pxPer = PH / (2 * Math.tan(camera.fov * Math.PI / 360));
+    const t = now - tr.start, m = smooth(t / FLY_S), mb = smooth((t - (HAND_S - 1.5)) / 1.3);
+    for (const { f, a, w } of tr.items) {
+      bv.set(w.x, 0, w.z).applyMatrix4(camera.matrixWorldInverse);
+      const d = Math.max(0.3, -bv.z);
+      bv.set(w.x, 0, w.z).project(camera);
+      const U3 = pxPer / d / WU * Math.abs(w.sc);
+      const la3 = 0.95 * Math.exp(-Math.max(0, d - FOG.uFogNear.value) * FOG.uFogK.value);
+      const hFull = mixLog(a.hFull, T.h * U3, m);
+      paintFlower(bc, {
+        x0: mix(a.x0, (bv.x + 1) / 2 * PW, m), y0: mix(a.y0, (1 - bv.y) / 2 * PH, m),
+        h: hFull, hFull, U: mixLog(a.U, U3, m),
+        pl: mixLog(a.pl, T.pl * U3 * mix(f.k / Math.abs(w.sc), 1, mb), m),
+        bend: mix(f.bend, w.sc < 0 ? -0.06 : 0.06, mb), tilt: mix(f.tilt, 0, mb),
+        sway: reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * hFull * (1 - mb),
+        b: mix(a.b, T.open, m), grow: 1, shape: P.shape, hue: P.hue, la: mix(a.la, la3, m)
+      });
+    }
+    if (t > HAND_S) {
+      for (const { w } of tr.items) addFlower(w.x, w.z, P.idx, w.sc, -100);
+      tr = null;
+      bc.clearRect(0, 0, PW, PH);
+    }
+  }
+  // 붓는 화면에 가려진 동안 카메라를 바로 새 꽃 앞으로 옮김
+  function snapCam() {
+    cam.x = focus.x; cam.z = focus.z; cam.y = 1.0;
+    cam.dist = FOCUS_D * userZoom;
+    // 다른 꽃 무리에 가리지 않는 쪽에 카메라를 세움 (되도록 바깥쪽에서, 뒤로 정원이 펼쳐지게)
+    const out = Math.hypot(focus.x, focus.z) > 0.5 ? Math.atan2(focus.x, focus.z) : cam.yaw;
+    let bestY = out, bestC = Infinity;
+    for (let i = 0; i < 24; i++) {
+      const y = out + (i / 24) * 6.2832, sx = Math.sin(y), sz = Math.cos(y);
+      let c = Math.abs(Math.atan2(Math.sin(y - out), Math.cos(y - out))) * 0.4;
+      for (const p of plots) {
+        const rx = p.x - focus.x, rz = p.z - focus.z;
+        if (Math.abs(rx) + Math.abs(rz) < 1e-6) continue;
+        const along = rx * sx + rz * sz, perp = Math.abs(rx * sz - rz * sx);
+        if (along > 0 && along < cam.dist + 1 && perp < p.rad + 0.5) c += 1 + (cam.dist - along) * 0.3;
+      }
+      if (c < bestC) { bestC = c; bestY = y; }
+    }
+    cam.yaw = bestY;
+    userPitch = null; cam.pitch = 0.15 + cam.dist * 0.0007;
+    camReady = true;
   }
 
   // --- 카메라: 가만히 두면 천천히 돌고, 끌면 둘러보고, 휠·두 손가락으로 확대 ---
@@ -572,15 +801,16 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 
   function updateCam(dt, now) {
     const idle = now - lastInput > 6 && pointers.size === 0;
-    if (idle) { userPitch = null; cam.yaw += dt * (reduceMotion ? 0.012 : 0.05); }
-    const over = clamp(gardenR * 1.35 + 6, 9, 80);
-    if (!camReady) { camReady = true; cam.dist = over; cam.y = 1.1 + over * 0.02; cam.pitch = 0.15 + over * 0.006; }   // 처음엔 정원 전체가 보이는 자리에서 시작
+    const focusing = focus && now < focus.until;
+    if (idle) { userPitch = null; if (!focusing) cam.yaw += dt * (reduceMotion ? 0.01 : 0.035); }   // 새 꽃을 보여주는 동안은 돌지 않음
+    const over = clamp(gardenR * 1.7 + 8, 12, 95);      // 정원 전체가 여유 있게 보이는 거리
+    if (!camReady) { camReady = true; cam.dist = over; cam.y = 1.1 + over * 0.02; cam.pitch = 0.15 + over * 0.0007; }   // 처음엔 정원 전체가 보이는 자리에서 시작
     let gd = over * userZoom, gx = 0, gz = 0, gyy = 1.1 + over * 0.02;
-    if (focus && now < focus.until) { gd = 7.5 * userZoom; gx = focus.x; gz = focus.z; gyy = 1.2; }   // 방금 핀 꽃 가까이
+    if (focus && now < focus.until) { gd = FOCUS_D * userZoom; gx = focus.x; gz = focus.z; gyy = 1.0; }   // 방금 핀 꽃 가까이
     const k = Math.min(1, dt * 0.9);
     cam.dist += (gd - cam.dist) * k;
     cam.x += (gx - cam.x) * k; cam.y += (gyy - cam.y) * k; cam.z += (gz - cam.z) * k;
-    if (userPitch === null) cam.pitch += (0.15 + cam.dist * 0.006 - cam.pitch) * k;
+    if (userPitch === null) cam.pitch += (0.15 + cam.dist * 0.0007 - cam.pitch) * k;
     const cp = Math.cos(cam.pitch);
     camera.position.set(cam.x + Math.sin(cam.yaw) * cp * cam.dist, cam.y + Math.sin(cam.pitch) * cam.dist, cam.z + Math.cos(cam.yaw) * cp * cam.dist);
     camera.lookAt(cam.x, cam.y, cam.z);
@@ -659,7 +889,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
 
     // 송이 수가 구간을 넘으면 꽃 전체가 한 단계 커짐
-    const n = pv.fl.length, T = TIERS[tierOf(Math.max(1, n))], kk = Math.min(1, dt * 3);
+    const n = pv.fl.length, T = TIERS[tierOf(Math.max(1, n))], kk = Math.min(1, dt * 1.4);
     for (const key in pv.cur) pv.cur[key] += (T[key] - pv.cur[key]) * kk;
     const fitN = Math.max(n, pv.v || 0, 1);
     pv.ps += (Math.min(1.6, PW * 0.84 / ((2 * 0.95 * Math.sqrt(fitN + 0.3) * pv.cur.sp + 120) * pu)) - pv.ps) * kk;
@@ -689,26 +919,29 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
       }
     }
 
-    // 다 붓고 꽃이 다 피면 잠시 보여준 뒤 3D 정원으로 넘어감
+    // 다 붓고 꽃이 다 피면 잠시 보여준 뒤, 핀 꽃이 3D 정원 속 제자리로 내려앉음
     if (!pouring && pv.endAt === null) {
       const lastBorn = n ? Math.max(...pv.fl.map(f => f.born)) : now;
-      pv.endAt = pv.cancel ? now : Math.max(now, lastBorn + 3.2) + 1.8;
+      pv.endAt = pv.cancel ? now : Math.max(now, lastBorn + 4) + 0.8;
     }
     if (pv.endAt !== null && now >= pv.endAt) {
-      if (!pv.planted && !pv.cancel && n > 0) {
-        pv.planted = true;
-        const plot = plantPlot(n, pv.t, false, now + 0.3);
-        focus = { x: plot.x, z: plot.z, until: now + 11 };
-        rainOn(plot.x, plot.z, 1.6, now + 0.2);
-        // 3D 정원에서 내 꽃을 최소 7초 보여준 뒤에야 다음 사람 차례
-        turnUntil = now + 1.1 + 7;
-        showCaption(`오늘, ${n}명의 나`, 1.1, 7.6);               // 붓는 장면의 글씨가 사라진 뒤에 나타남
-      }
-      pv.fade -= dt / 1.1;
+      if (!pv.planted && !pv.cancel && n > 0) startTransition(now);
+      pv.fade -= dt / 1.3;
       if (pv.fade <= 0) { pv = null; pourCanvas.style.opacity = "0"; }
     } else pv.fade = Math.min(1, pv.fade + dt / 0.6);
   }
 
+  // 붓는 화면에서 꽃 한 송이의 모습: 가운데에 심겨 자라고 핌
+  function pourParams(f, now) {
+    const U = pu * pv.ps, C = pv.cur, age = now - f.born;
+    // 앞(아래)에 있는 꽃은 조금 크고 밝게, 뒤(위)에 있는 꽃은 조금 작고 흐리게
+    const z = f.cz * C.sp, dsc = clamp(1 - z * 0.0028, 0.75, 1.25), Uf = U * dsc;
+    const grow = smooth(age / 2.6), hFull = C.h * f.hk * Uf, h = hFull * grow;
+    return { x0: PW / 2 + f.cx * C.sp * U, y0: pgy - z * 0.3 * U, h, hFull, bend: f.bend,
+      sway: reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h, pl: C.pl * f.k * Uf,
+      b: smooth((age - 1.6) / 2.4) * C.open, grow, shape: pv.shape, hue: pv.hue, tilt: f.tilt,
+      la: clamp(1.1 - z * 0.004, 0.6, 1), U: Uf };
+  }
   function drawPreview(now) {
     pc.setTransform(PD, 0, 0, PD, 0, 0);
     pc.globalCompositeOperation = "source-over"; pc.globalAlpha = 1;
@@ -720,17 +953,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
     pc.globalAlpha = 1;
 
-    const U = pu * pv.ps, C = pv.cur;
-    for (const f of pv.fl) {
-      const age = now - f.born; if (age < 0) continue;
-      // 앞(아래)에 있는 꽃은 조금 크고 밝게, 뒤(위)에 있는 꽃은 조금 작고 흐리게
-      const z = f.cz * C.sp, dsc = clamp(1 - z * 0.0028, 0.75, 1.25), Uf = U * dsc;
-      const grow = ease(age / 1.8), hFull = C.h * f.hk * Uf, h = hFull * grow;
-      paintFlower(pc, { x0: PW / 2 + f.cx * C.sp * U, y0: pgy - z * 0.3 * U, h, hFull, bend: f.bend,
-        sway: reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h, pl: C.pl * f.k * Uf,
-        b: ease((age - 1.2) / 1.8) * C.open, grow, shape: pv.shape, hue: pv.hue, tilt: f.tilt,
-        la: clamp(1.1 - z * 0.004, 0.6, 1), U: Uf });
-    }
+    if (!pv.planted) for (const f of pv.fl) if (now >= f.born) paintFlower(pc, pourParams(f, now));
 
     pc.globalCompositeOperation = "lighter";
     pc.strokeStyle = "rgba(255,232,190,0.22)"; pc.lineWidth = Math.max(0.8, pu);
@@ -831,7 +1054,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     renderer.setSize(PW, PH, false);
     camera.aspect = PW / PH; camera.updateProjectionMatrix();
     FOG.uPx.value = PH * PD / (2 * Math.tan(camera.fov * Math.PI / 360));
-    pourCanvas.width = Math.round(PW * PD); pourCanvas.height = Math.round(PH * PD);
+    pourCanvas.width = bloomCanvas.width = Math.round(PW * PD); pourCanvas.height = bloomCanvas.height = Math.round(PH * PD);
     pu = Math.min(PH, PW * 1.6) / 900;
     pgy = PH * 0.8;
     buildPourBed();
@@ -847,9 +1070,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
       nextPour(now);
       updatePreview(dt, now);
       updateCam(dt, now);
+      updateSky();
       FOG.uTime.value = now;
       if (!pv || pv.fade < 1) renderer.render(scene, camera);      // 붓는 장면이 화면을 다 덮는 동안은 3D를 쉬게 함
       if (pv) drawPreview(now);
+      drawBloom(now);
       hudEl.textContent = `정원에 핀 꽃 ${flowerCount}송이, 함께한 사람 ${plots.length}명` + (sensorStatus ? `  ·  ${sensorStatus}` : "");
     }
     requestAnimationFrame(frame);

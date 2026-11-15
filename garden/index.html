@@ -403,8 +403,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
 
     // 잎
-    if (o.grow > 0.4) {
-      const lg = ease((o.grow - 0.4) / 0.6);
+    if (o.grow > 0.35) {
+      const lg = smooth((o.grow - 0.35) / 0.65);
       c.globalAlpha = 0.9 * la;
       [[0.22, -1, 0.34], [0.42, 1, 0.28]].forEach(([t, side, k]) => {
         const m = 1 - t;
@@ -418,9 +418,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     }
 
     // 꽃
-    if (o.grow > 0.85) {
+    const hs = smooth((o.grow - 0.45) / 0.55);          // 꽃머리가 맺히는 정도
+    if (hs > 0.01) {
       const b = Math.max(0.06, o.b);
-      const len = o.pl * (0.45 + 0.55 * b) * 0.9;
+      const len = o.pl * (0.45 + 0.55 * b) * 0.9 * (0.15 + 0.85 * hs);
       const SH = SHAPES[o.shape], k = SH.k;
       const wid = len * SH.wf * 1.25;
       const spread = 0.14 + 1.1 * b;
@@ -440,7 +441,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
         c.restore();
       }
       // 꽃 속의 빛
-      c.globalAlpha = la * Math.min(1, 0.35 + b);
+      c.globalAlpha = la * Math.min(1, 0.35 + b) * hs;
       const cr = len * (0.3 + 0.32 * b);
       c.drawImage(CORE, -cr, -cr * 1.2, cr * 2, cr * 2);
       c.restore();
@@ -458,6 +459,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   let pour = null;            // 지금 모래가 내리는 중
 
   const ease = t => t <= 0 ? 0 : t >= 1 ? 1 : 1 - Math.pow(1 - t, 3);
+  const smooth = t => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);   // 천천히 시작해 천천히 멈춤 (자라는 움직임용)
   const hashHue = t => Math.abs(Math.floor(t / 7) * 2654435761 % HUES.length);
   const hashShape = t => Math.abs(Math.floor(t / 13) * 2246822519 % SHAPES.length);
 
@@ -671,8 +673,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   function drawFlower(f, plot, now, s, la) {
     const age = now - plot.born - (plot.instant ? 0 : f.delay);
     if (age < 0) return;
-    const grow = ease(age / 2.2);
-    const bloom = ease((age - 1.6) / 2.4) * f.open;
+    const grow = smooth(age / 2.6);
+    const bloom = smooth((age - 1.6) / 2.6) * f.open;
     const x0 = plot.x + f.dx * s, y0 = groundY(x0, plot.layer) + (f.dz || 0) * s;
     const h = f.h * s * grow;
     const sway = reduceMotion ? 0 : Math.sin(now * 0.8 + f.phase) * 0.04 * h;
