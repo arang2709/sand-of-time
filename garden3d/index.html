@@ -614,8 +614,20 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     pv.hue = hashHue(pv.t); pv.shape = hashShape(pv.t);
     pgrains.length = 0; psettled.length = 0;
   }
+  // 한 사람의 순서(붓는 장면 → 3D 정원에서 내 꽃 보여주기)가 끝나야 다음 사람 순서가 시작됨
+  let turnUntil = 0, capTimer = 0;
+  function showCaption(text, from, to) {
+    clearTimeout(capTimer);
+    capEl.classList.remove("on");
+    capEl.textContent = text;
+    capTimer = setTimeout(() => {
+      capEl.classList.add("on");
+      capTimer = setTimeout(() => capEl.classList.remove("on"), (to - from) * 1000);
+    }, from * 1000);
+  }
   function nextPour(now) {
-    if (pv || !queue.length) return;
+    if (pv || !queue.length || now < turnUntil) return;
+    clearTimeout(capTimer); capEl.classList.remove("on");
     const q = queue.shift();
     startPreview({ auto: true, v: q.v, t: q.t, until: now + 2.6 + q.v * 0.55 });
   }
@@ -681,9 +693,9 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
         const plot = plantPlot(n, pv.t, false, now + 0.3);
         focus = { x: plot.x, z: plot.z, until: now + 11 };
         rainOn(plot.x, plot.z, 1.6, now + 0.2);
-        capEl.textContent = `오늘, ${n}명의 나`;
-        setTimeout(() => capEl.classList.add("on"), 1100);        // 붓는 장면의 글씨가 사라진 뒤에 나타남
-        setTimeout(() => capEl.classList.remove("on"), 8000);
+        // 3D 정원에서 내 꽃을 최소 7초 보여준 뒤에야 다음 사람 차례
+        turnUntil = now + 1.1 + 7;
+        showCaption(`오늘, ${n}명의 나`, 1.1, 7.6);               // 붓는 장면의 글씨가 사라진 뒤에 나타남
       }
       pv.fade -= dt / 1.1;
       if (pv.fade <= 0) { pv = null; pourCanvas.style.opacity = "0"; }
@@ -742,7 +754,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   const sentTs = new Set();            // 이 화면이 직접 저장한 입력 (Firebase에서 다시 받아도 중복으로 심지 않음)
   window.garden = {
     // 모래가 흐르기 시작 → 붓는 장면 시작
-    flowStart() { if (!pv) startPreview({ sensor: true }); },
+    flowStart() { if (!pv) { clearTimeout(capTimer); capEl.classList.remove("on"); startPreview({ sensor: true }); } },
     // 붓는 중: 지금까지 부은 무게(g) → 꽃 송이가 실시간으로 늘어남
     flowProgress(g) { if (pv && pv.sensor && !pv.v) pv.live = clamp(Math.round((Number(g) || 0) / SCOOP_G), 1, 10); },
     // 모래가 멈춤 → 방금 부은 무게(g)로 송이 수를 확정

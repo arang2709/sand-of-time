@@ -592,8 +592,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   // 한 번 허락한 아두이노는 다음부터 자동으로 연결
   if ("serial" in navigator) navigator.serial.getPorts().then(ps => { if (ps[0]) openPort(ps[0]).catch(() => {}); });
 
+  // 한 사람의 꽃이 다 피고 이름이 보인 뒤에 다음 사람의 모래가 내림
+  let turnUntil = 0;
   function nextPour(now) {
-    if (pour || !queue.length) return;
+    if (pour || !queue.length || now < turnUntil) return;
     const q = queue.shift();
     const plot = makePlot(q.v, q.t, placePlot(q.v));
     pour = { v: q.v, start: now, until: now + 2.6 + q.v * 0.55, plot };
@@ -652,6 +654,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
     // 모래가 멈추면 그 자리에서 꽃이 돋아남
     if (pour && now >= pour.until && pour.plot) {
       plant(pour.plot, false);
+      turnUntil = now + 6.5;
       pour = null;
     }
   }
